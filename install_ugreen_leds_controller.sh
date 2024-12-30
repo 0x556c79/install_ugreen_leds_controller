@@ -1,11 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
-
-# Ensure script is run as root
-if [ "$EUID" -ne 0 ]; then
-    echo "Please run as root."
-    exit 1
-fi
 
 # Cleanup function to remove the ugreen_leds_controller folder
 cleanup() {
@@ -14,12 +8,40 @@ cleanup() {
     echo "Cleanup completed."
 }
 
+help() {
+    echo "Installation helper for ugreen_leds_controller. Needs to be run as root"
+    echo
+    echo "Syntax: install_ugreen_leds_controller.sh [-h] [-tv <version>]"
+    echo "options:"
+    echo "-h      Print this help."
+    echo "-v      Use predefined TrueNAS version. If not specified it will be extracted from the OS," 
+    echo "        but pre-built binaries might not exist. Use format X.Y.Z (X.Y.Z.W applicable as well)."
+    echo
+}
+
+
 # Variables
 REPO_URL="https://raw.githubusercontent.com/miskcoo/ugreen_leds_controller/refs/heads/gh-actions/build-scripts/truenas/build"
 KMOD_URLS=(
     "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-ElectricEel"
     "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Dragonfish"
 )
+TRUENAS_VERSION=""
+
+# Handle arguments first
+while getopts ":hv:" option; do
+    case "$option" in
+        h)  # Help
+            help
+            exit;;
+        v) # Specified TrueNAS version
+            TRUENAS_VERSION=${OPTARG};;
+        \?) # Unknown option
+            echo "Invalid command line option -${OPTARG}. Use -h for help."
+            exit 1
+    esac
+done
+
 # Initialize an empty array for supported versions
 SUPPORTED_VERSIONS=()
 # Loop through each URL
@@ -35,9 +57,21 @@ for URL in "${KMOD_URLS[@]}"; do
         SUPPORTED_VERSIONS+=("$VERSION")
     done <<< "$VERSIONS"
 done
+
+
+# Ensure script is run as root
+if [ "$EUID" -ne 0 ]; then
+    echo "Please run as root."
+    exit 1
+fi
+
 # Remove duplicates and sort versions
 SUPPORTED_VERSIONS=($(echo "${SUPPORTED_VERSIONS[@]}" | tr ' ' '\n' | sort -u))
-TRUENAS_VERSION=$(cat /etc/version | grep -oP '^[0-9]+\.[0-9]+(\.[0-9]+)?(\.[0-9]+)?')
+OS_VERSION=$(cat /etc/version | grep -oP '^[0-9]+\.[0-9]+(\.[0-9]+)?(\.[0-9]+)?')
+# If no version was specified as an argument, fall back to /etc/version
+if [ -z "${TRUENAS_VERSION}" ]; then
+    TRUENAS_VERSION=${OS_VERSION}
+fi
 TRUENAS_SERIES=$(echo "$TRUENAS_VERSION" | cut -d'.' -f1,2)
 
 # Map version to TrueNAS name
@@ -70,7 +104,7 @@ if ! curl --head --silent --fail "${MODULE_URL}" > /dev/null; then
 fi
 
 # Variables for remount paths
-BOOT_POOL_PATH="boot-pool/ROOT/${TRUENAS_VERSION}"
+BOOT_POOL_PATH="boot-pool/ROOT/${OS_VERSION}"
 
 # Until next reboot we need write access
 # Remount boot-pool datasets with write access
