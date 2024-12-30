@@ -15,7 +15,21 @@ curl -sf https://raw.githubusercontent.com/0x556c79/install_ugreen_leds_controll
 - Copies the files to the required locations and loads the kernel modules
 - Starts the service
 
+## Usage
 
+**Run the Script:**
+```bash
+./install_ugreen_leds_controller.sh
+```
+**Show Help:**
+```bash
+./install_ugreen_leds_controller.sh -h
+```
+**Define your TrueNAS version:**</br>
+This is helpful in cases like this [issue](https://github.com/0x556c79/install_ugreen_leds_controller/issues/1) where the kernel headers have not changed, but there is no packages index to give us the headers' version.
+```bash
+./install_ugreen_leds_controller.sh -v 24.10.1
+```
 
 ## Manual installation
 
