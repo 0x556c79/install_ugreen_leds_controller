@@ -254,7 +254,7 @@ for script in "${scripts[@]}"; do
     cp "scripts/$script" /usr/bin
 done
 
-cp scripts/*.service /etc/systemd/system/
+cp scripts/systemd/*.service /etc/systemd/system/
 systemctl daemon-reload
 
 # Enable and start diskiomon service
