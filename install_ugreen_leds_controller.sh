@@ -25,6 +25,7 @@ REPO_URL="https://raw.githubusercontent.com/miskcoo/ugreen_leds_controller/refs/
 KMOD_URLS=(
     "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-ElectricEel"
     "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Dragonfish"
+    "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Fangtooth"
 )
 TRUENAS_VERSION=""
 
@@ -79,6 +80,8 @@ if [[ "$TRUENAS_SERIES" == "24.10" ]]; then
     TRUENAS_NAME="TrueNAS-SCALE-ElectricEel"
 elif [[ "$TRUENAS_SERIES" == "24.04" ]]; then
     TRUENAS_NAME="TrueNAS-SCALE-Dragonfish"
+elif [[ "$TRUENAS_SERIES" == "25.04" ]]; then
+    TRUENAS_NAME="TrueNAS-SCALE-Fangtooth"
 else
     echo "Unsupported TrueNAS SCALE version series: ${TRUENAS_SERIES}."
     echo "Please build the kernel module manually."
