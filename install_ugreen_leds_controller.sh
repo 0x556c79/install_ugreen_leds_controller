@@ -147,20 +147,33 @@ echo "Loading kernel modules..."
 depmod
 modprobe -a i2c-dev led-ugreen ledtrig-oneshot ledtrig-netdev
 
-CONFIG_FILE="$CLONE_DIR/ugreen-leds.conf"
+CONFIG_FILE="$INSTALL_DIR/ugreen-leds.conf"
+TEMPLATE_CONFIG="$CLONE_DIR/scripts/ugreen-leds.conf"
+
 if [[ -f "$CONFIG_FILE" ]]; then
     echo "Using existing configuration file at $CONFIG_FILE"
+    echo ""
+    echo "################################################################################################################################################"
+    echo "Note: The configuration file from the repository may have new options. Please review $TEMPLATE_CONFIG and update your $CONFIG_FILE if necessary."
+    echo "################################################################################################################################################"
+    echo ""
+    echo "Do you want to modify the LED configuration file now? (y/n)"
+    read -r MODIFY_CONF
+    if [[ "$MODIFY_CONF" == "y" ]]; then
+        nano "$CONFIG_FILE"
+    fi
     cp "$CONFIG_FILE" /etc/ugreen-leds.conf
+    echo "Configuration file "$CONFIG_FILE" for ugreen-leds copied to /etc/ugreen-leds.conf."
 else
     echo "Do you want to modify the LED configuration file now? (y/n)"
     read -r MODIFY_CONF
     if [[ "$MODIFY_CONF" == "y" ]]; then
-        nano "$CLONE_DIR/scripts/ugreen-leds.conf"
+        nano "$TEMPLATE_CONFIG"
     fi
-    cp "$CLONE_DIR/scripts/ugreen-leds.conf" /etc/ugreen-leds.conf
-    cp "$CLONE_DIR/scripts/ugreen-leds.conf" "$CONFIG_FILE"
+    cp "$TEMPLATE_CONFIG" /etc/ugreen-leds.conf
+    cp "$TEMPLATE_CONFIG" "$CONFIG_FILE"
     chmod 644 /etc/ugreen-leds.conf
-    echo "Configuration file for ugreen-leds saved /etc/ugreen-leds.conf."
+    echo "Configuration file for ugreen-leds saved as /etc/ugreen-leds.conf."
 fi
 
 echo "Detecting network interfaces..."
@@ -218,7 +231,7 @@ check_and_remove_existing_services
 echo "Setting up systemd services..."
 cd "$CLONE_DIR"
 
-scripts=("ugreen-diskiomon" "ugreen-netdevmon" "ugreen-probe-leds")
+scripts=("ugreen-diskiomon" "ugreen-netdevmon" "ugreen-probe-leds" "ugreen-power-led")
 for script in "${scripts[@]}"; do
     chmod +x "scripts/$script"
     cp "scripts/$script" /usr/bin
@@ -237,6 +250,15 @@ else
     echo "Enabling and starting ugreen-netdevmon service for interface: ${CHOSEN_INTERFACE}..."
     systemctl enable "ugreen-netdevmon@${CHOSEN_INTERFACE}"
     systemctl restart "ugreen-netdevmon@${CHOSEN_INTERFACE}"
+fi
+
+# Check if BLINK_TYPE_POWER is enabled
+if grep -q -E '^BLINK_TYPE_POWER=(?!none$).+' "$CONFIG_FILE"; then
+    echo "Enabling and starting ugreen-power-led.service because BLINK_TYPE_POWER is set."
+    systemctl enable ugreen-power-led.service
+    systemctl start ugreen-power-led.service
+else
+    echo "BLINK_TYPE_POWER is set to 'none', not enabling ugreen-power-led.service."
 fi
 
 cleanup
