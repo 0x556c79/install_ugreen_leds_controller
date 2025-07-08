@@ -4,7 +4,7 @@ set -e
 # Cleanup function to remove the ugreen_leds_controller folder
 cleanup() {
     echo "Cleaning up..."
-    rm -rf "$INSTALL_DIR"
+    rm -rf "$CLONE_DIR"
     echo "Cleanup completed."
 }
 
@@ -31,12 +31,12 @@ TRUENAS_VERSION=""
 # Handle arguments first
 while getopts ":hv:" option; do
     case "$option" in
-        h)  # Help
+        h)
             help
             exit;;
-        v) # Specified TrueNAS version
+        v)
             TRUENAS_VERSION=${OPTARG};;
-        \?) # Unknown option
+        \?)
             echo "Invalid command line option -${OPTARG}. Use -h for help."
             exit 1
     esac
@@ -64,9 +64,11 @@ if [[ "$INSTALL_DIR" == /home/* ]]; then
     exit 1
 fi
 
+# Set the clone directory
+CLONE_DIR="$INSTALL_DIR/ugreen_leds_controller"
+
 # Initialize an empty array for supported versions
 SUPPORTED_VERSIONS=()
-# Loop through each URL
 for URL in "${KMOD_URLS[@]}"; do
     HTML_CONTENT=$(curl -s "$URL")
     VERSIONS=$(echo "$HTML_CONTENT" | grep -oE 'TrueNAS-SCALE-[^/]*/[0-9]+(\.[0-9]+)*' | grep -oE '[0-9]+(\.[0-9]+)*')
@@ -75,17 +77,14 @@ for URL in "${KMOD_URLS[@]}"; do
     done <<< "$VERSIONS"
 done
 
-# Remove duplicates and sort versions
 SUPPORTED_VERSIONS=($(echo "${SUPPORTED_VERSIONS[@]}" | tr ' ' '\n' | sort -u))
 OS_VERSION=$(cat /etc/version | grep -oP '^[0-9]+\.[0-9]+(\.[0-9]+)?(\.[0-9]+)?')
-
 if [ -z "${TRUENAS_VERSION}" ]; then
     TRUENAS_VERSION=${OS_VERSION}
 fi
 
 TRUENAS_SERIES=$(echo "$TRUENAS_VERSION" | cut -d'.' -f1,2)
 
-# Map version to TrueNAS name
 if [[ "$TRUENAS_SERIES" == "24.10" ]]; then
     TRUENAS_NAME="TrueNAS-SCALE-ElectricEel"
 elif [[ "$TRUENAS_SERIES" == "24.04" ]]; then
@@ -98,14 +97,12 @@ else
     exit 1
 fi
 
-# Validate full version
 if [[ ! " ${SUPPORTED_VERSIONS[@]} " =~ " ${TRUENAS_VERSION} " ]]; then
     echo "Unsupported TrueNAS SCALE version: ${TRUENAS_VERSION}."
     echo "Please build the kernel module manually."
     exit 1
 fi
 
-# Construct the kernel module URL
 MODULE_URL="${REPO_URL}/${TRUENAS_NAME}/${TRUENAS_VERSION}/led-ugreen.ko"
 
 echo "Checking if kernel module exists for TrueNAS version ${TRUENAS_VERSION}..."
@@ -121,13 +118,13 @@ echo "Remounting boot-pool datasets with write access..."
 mount -o remount,rw "${BOOT_POOL_PATH}/usr" || exit 1
 mount -o remount,rw "${BOOT_POOL_PATH}/etc" || exit 1
 
-# Clone the Ugreen LEDs Controller repository into current directory if not already present
-if [ ! -d "$INSTALL_DIR/.git" ]; then
-    echo "Cloning Ugreen LEDs Controller repository into $INSTALL_DIR..."
-    git clone https://github.com/miskcoo/ugreen_leds_controller.git "$INSTALL_DIR" -q
-    echo "Repository successfully cloned into $INSTALL_DIR"
+# Clone the Ugreen LEDs Controller repository into subdirectory if not already present
+if [ ! -d "$CLONE_DIR/.git" ]; then
+    echo "Cloning Ugreen LEDs Controller repository into $CLONE_DIR..."
+    git clone https://github.com/miskcoo/ugreen_leds_controller.git "$CLONE_DIR" -q
+    echo "Repository successfully cloned into $CLONE_DIR"
 else
-    echo "Repository already present in $INSTALL_DIR"
+    echo "Repository already present in $CLONE_DIR"
 fi
 
 # Install the kernel module
@@ -150,7 +147,7 @@ echo "Loading kernel modules..."
 depmod
 modprobe -a i2c-dev led-ugreen ledtrig-oneshot ledtrig-netdev
 
-CONFIG_FILE="$INSTALL_DIR/ugreen-leds.conf"
+CONFIG_FILE="$CLONE_DIR/ugreen-leds.conf"
 if [[ -f "$CONFIG_FILE" ]]; then
     echo "Using existing configuration file at $CONFIG_FILE"
     cp "$CONFIG_FILE" /etc/ugreen-leds.conf
@@ -158,10 +155,10 @@ else
     echo "Do you want to modify the LED configuration file now? (y/n)"
     read -r MODIFY_CONF
     if [[ "$MODIFY_CONF" == "y" ]]; then
-        nano "$INSTALL_DIR/scripts/ugreen-leds.conf"
+        nano "$CLONE_DIR/scripts/ugreen-leds.conf"
     fi
-    cp "$INSTALL_DIR/scripts/ugreen-leds.conf" /etc/ugreen-leds.conf
-    cp "$INSTALL_DIR/scripts/ugreen-leds.conf" "$CONFIG_FILE"
+    cp "$CLONE_DIR/scripts/ugreen-leds.conf" /etc/ugreen-leds.conf
+    cp "$CLONE_DIR/scripts/ugreen-leds.conf" "$CONFIG_FILE"
     chmod 644 /etc/ugreen-leds.conf
     echo "Configuration file for ugreen-leds saved /etc/ugreen-leds.conf."
 fi
@@ -219,7 +216,7 @@ check_and_remove_existing_services
 
 # Copy scripts and configure services
 echo "Setting up systemd services..."
-cd "$INSTALL_DIR"
+cd "$CLONE_DIR"
 
 scripts=("ugreen-diskiomon" "ugreen-netdevmon" "ugreen-probe-leds")
 for script in "${scripts[@]}"; do
