@@ -253,7 +253,7 @@ else
 fi
 
 # Check if BLINK_TYPE_POWER is enabled
-if grep -q -E '^BLINK_TYPE_POWER=(?!none$).+' "$CONFIG_FILE"; then
+if grep -qP '^BLINK_TYPE_POWER=(?!none$).+' "$CONFIG_FILE"; then
     echo "Enabling and starting ugreen-power-led.service because BLINK_TYPE_POWER is set."
     systemctl enable ugreen-power-led.service
     systemctl start ugreen-power-led.service
