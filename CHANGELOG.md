@@ -2,8 +2,56 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.0.2] - 2024-11-08
+
+### Added
+
+#### Dynamic Version Detection
+- **GitHub API Integration**: Script now dynamically fetches available TrueNAS versions from GitHub repository
+  - Automatically discovers new TrueNAS versions without script updates
+  - Uses GitHub API to query available build directories
+  - Builds `KMOD_URLS` array dynamically from repository contents
+- **Fallback Mechanism**: Falls back to hardcoded version list if GitHub API is unavailable
+  - Network issues handled gracefully
+  - API rate limits don't break installation
+  - Maintains compatibility if GitHub API changes
+
+### Changed
+
+#### Version Management
+- **Future-Proof Design**: New TrueNAS releases automatically supported when added to upstream repository
+  - No manual script updates required for new versions
+  - Eliminates maintenance burden for version updates
+  - User feedback when using dynamic vs fallback mode
+
+### Fixed
+
+#### Code Quality
+- **ShellCheck Compliance**: Removed unused `script_parent` variable (lines 167-168)
+  - Cleaned up dead code from earlier development
+  - Improved script maintainability
+
+### Technical Details
+
+#### API Integration
+```bash
+# Dynamic fetching
+API_URL="https://api.github.com/repos/miskcoo/ugreen_leds_controller/contents/build-scripts/truenas/build?ref=gh-actions"
+KMOD_DIRS=$(curl -s "${API_URL}" | grep -oP '"name":\s*"\K(TrueNAS-SCALE-[^"]+)')
+
+# Fallback on failure
+if [ ${#KMOD_URLS[@]} -eq 0 ]; then
+    # Use hardcoded list
+fi
+```
+
+#### Benefits
+- Automatic support for future TrueNAS versions (Honeybadger, etc.)
+- Reduced maintenance overhead
+- Better error handling and user feedback
+- Maintains backward compatibility
+
+---
 
 ## [2.0.1] - 2024-11-08
 
