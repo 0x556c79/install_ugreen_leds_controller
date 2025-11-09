@@ -57,12 +57,33 @@ help() {
 
 # Variables
 REPO_URL="https://raw.githubusercontent.com/miskcoo/ugreen_leds_controller/refs/heads/gh-actions/build-scripts/truenas/build"
-KMOD_URLS=(
-    "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-ElectricEel"
-    "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Dragonfish"
-    "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Fangtooth"
-    "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Goldeye"
-)
+# Dynamically fetch available TrueNAS builds from GitHub
+REPO_OWNER="miskcoo"
+REPO_NAME="ugreen_leds_controller"
+REPO_BRANCH="gh-actions"
+BUILD_PATH="build-scripts/truenas/build"
+API_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${BUILD_PATH}?ref=${REPO_BRANCH}"
+
+echo "Fetching available TrueNAS versions from GitHub..."
+KMOD_DIRS=$(curl -s "${API_URL}" | grep -oP '"name":\s*"\K(TrueNAS-SCALE-[^"]+)' || true)
+
+KMOD_URLS=()
+while IFS= read -r dir_name; do
+    if [ -n "$dir_name" ]; then
+        KMOD_URLS+=("https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/${BUILD_PATH}/${dir_name}")
+    fi
+done <<< "$KMOD_DIRS"
+
+# Fallback to hardcoded list if API fails
+if [ ${#KMOD_URLS[@]} -eq 0 ]; then
+    echo "Warning: Could not fetch versions from GitHub API, using fallback list"
+    KMOD_URLS=(
+        "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-ElectricEel"
+        "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Dragonfish"
+        "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Fangtooth"
+        "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Goldeye"
+    )
+fi
 TRUENAS_VERSION=""
 PERSIST_DIR=""
 USE_CURRENT_DIR=false
@@ -143,8 +164,6 @@ determine_persistent_directory() {
     local persist_base=""
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local script_parent
-    script_parent="$(dirname "$script_dir")"
     local current_dir_name
     current_dir_name="$(basename "$script_dir")"
 
