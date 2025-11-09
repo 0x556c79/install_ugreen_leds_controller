@@ -1,6 +1,6 @@
 # Ugreen LED Controller Installer
 
-Small, single-file Bash installer for the [ugreen_leds_controller](https://github.com/miskcoo/ugreen_leds_controller) project. It clones (unless `--no-clone`), installs the kernel module, copies helper scripts and a systemd unit, and enables the service.
+Small, single-file Bash installer for the [ugreen_leds_controller](https://github.com/miskcoo/ugreen_leds_controller) project. It clones, installs the kernel module, copies helper scripts and a systemd unit, and enables the service.
 
 ## Quick install
 
