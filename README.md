@@ -2,7 +2,8 @@
 
 Small, single-file Bash installer for the [ugreen_leds_controller](https://github.com/miskcoo/ugreen_leds_controller) project. It clones (unless `--no-clone`), installs the kernel module, copies helper scripts and a systemd unit, and enables the service.
 
-## Quick install:
+## Quick install
+
 **Always validate what the script does before running**</br>
 
 Run the following command to install:</br>
@@ -34,6 +35,7 @@ curl -sf https://raw.githubusercontent.com/0x556c79/install_ugreen_leds_controll
 The script intelligently detects the persistent directory location:
 
 1. **Script in `leds_controller/` directory**: If the script is already located in a folder named `leds_controller`, this folder is used as the persistent directory.
+
    ```bash
    # Example: Script is at /mnt/tank/apps/leds_controller/install_ugreen_leds_controller.sh
    cd /mnt/tank/apps/leds_controller
@@ -41,6 +43,7 @@ The script intelligently detects the persistent directory location:
    ```
 
 2. **Existing `leds_controller/` at same level**: If a `leds_controller` directory exists at the same level as the script, it will be reused.
+
    ```bash
    # Example: Script is at /mnt/tank/apps/install_ugreen_leds_controller.sh
    # and /mnt/tank/apps/leds_controller/ already exists
@@ -53,26 +56,33 @@ The script intelligently detects the persistent directory location:
 #### Manual Installation Options
 
 #### Option 1: Interactive (Recommended for first-time setup)
+
 ```bash
 cd /mnt/<POOL>/<DATASET>/<FOLDER>
 sudo bash install_ugreen_leds_controller.sh
 ```
+
 The installer will prompt you to choose a persistent storage location.
 
 #### Option 2: Use Current Directory
+
 ```bash
 cd /mnt/<POOL>/<DATASET>/<FOLDER>
 sudo bash install_ugreen_leds_controller.sh --use-current-dir
 ```
+
 Creates `leds_controller/` in your current directory.
 
 #### Option 3: Specify Pool Path
+
 ```bash
 sudo bash install_ugreen_leds_controller.sh --pool-path <POOL>/<DATASET>/<FOLDER>
 ```
+
 Example: `--pool-path tank/apps/ugreen`
 
 #### Option 4: Explicit Persistent Directory
+
 ```bash
 sudo bash install_ugreen_leds_controller.sh --persist-dir /mnt/<POOL>/<PATH>/leds_controller
 ```
@@ -82,6 +92,7 @@ sudo bash install_ugreen_leds_controller.sh --persist-dir /mnt/<POOL>/<PATH>/led
 To ensure LED controller starts after every reboot:
 
 1. **Copy the installer to the persistent directory** (if not already there):
+
    ```bash
    cp install_ugreen_leds_controller.sh /mnt/<POOL>/<PATH>/leds_controller/
    ```
@@ -91,13 +102,14 @@ To ensure LED controller starts after every reboot:
 4. Configure:
    - **Description**: `UGREEN LED Controller`
    - **Type**: `Command`
-   - **Command**: `/mnt/<POOL>/<PATH>/leds_controller/install_ugreen_leds_controller.sh --yes`
+   - **Command**: `/bin/bash /mnt/<POOL>/<PATH>/leds_controller/install_ugreen_leds_controller.sh --yes`
    - **When**: `Post Init`
    - **Enabled**: ✓ (checked)
    - **Timeout**: `10` seconds
 5. Click **Save**
 
 **Why this works:**
+
 - The script detects it's running from inside the `leds_controller/` directory
 - It uses that directory as the persistent storage location
 - The `--yes` flag enables non-interactive mode for automated execution
@@ -106,6 +118,7 @@ To ensure LED controller starts after every reboot:
 ### Persistent Directory Structure
 
 The installer creates the following structure:
+
 ```
 /mnt/<POOL>/<PATH>/leds_controller/
 ├── .version                                    # TrueNAS version tracker
@@ -158,29 +171,34 @@ Options:
 ### Troubleshooting
 
 **Check service status:**
+
 ```bash
 systemctl status ugreen-diskiomon.service
 systemctl status ugreen-netdevmon@<interface>.service
 ```
 
 **View installer logs:**
+
 ```bash
 ls -lh /mnt/<POOL>/<PATH>/leds_controller/
 cat /mnt/<POOL>/<PATH>/leds_controller/.version
 ```
 
 **Force module re-download:**
+
 ```bash
 rm /mnt/<POOL>/<PATH>/leds_controller/.version
 /mnt/<POOL>/<PATH>/leds_controller/install_ugreen_leds_controller.sh --yes
 ```
 
 **Verify module is loaded:**
+
 ```bash
 lsmod | grep led_ugreen
 ```
 
 **Check persistent directory paths in services:**
+
 ```bash
 grep ExecStart /etc/systemd/system/ugreen-*.service
 ```
@@ -203,11 +221,11 @@ If you have existing installation in system directories:
 - Use `--dry-run` to preview actions without changing the system
 - Configuration changes in `/etc/ugreen-leds.conf` persist across reboots
 
-## Disclaimer:
+## Disclaimer
 
 Use at your own risk.
 
 Tested and developed on a Ugreen DXP8800 Plus NAS. <br>
-Also confirmed working on a UGREEN DXP4800 with TrueNAS SCALE 25.04.2.5 (https://github.com/0x556c79/install_ugreen_leds_controller/issues/6) (with Version 1.0 of the script)
+Also confirmed working on a UGREEN DXP4800 with TrueNAS SCALE 25.04.2.5 (<https://github.com/0x556c79/install_ugreen_leds_controller/issues/6>) (with Version 1.0 of the script)
 
 The author is not responsible for damage caused by running this script.
