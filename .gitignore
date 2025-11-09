@@ -1,4 +1,5 @@
 # Local documentation (internal, not for public repo)
+.gitignore
 local_docs/
 .github/
 
