@@ -332,6 +332,8 @@ elif [[ "$TRUENAS_SERIES" == "24.04" ]]; then
     TRUENAS_NAME="TrueNAS-SCALE-Dragonfish"
 elif [[ "$TRUENAS_SERIES" == "25.04" ]]; then
     TRUENAS_NAME="TrueNAS-SCALE-Fangtooth"
+elif [[ "$TRUENAS_SERIES" == "25.10" ]]; then
+    TRUENAS_NAME="TrueNAS-SCALE-Goldeye"
 else
     echo "Unsupported TrueNAS SCALE version series: ${TRUENAS_SERIES}."
     echo "Please build the kernel module manually."
