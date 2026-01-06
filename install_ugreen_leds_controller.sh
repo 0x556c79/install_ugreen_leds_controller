@@ -315,7 +315,7 @@ find_codename_for_version() {
     local version="$1"
     local found_codename=""
     
-    log "Searching for codename matching version ${version}..."
+    log "Searching for codename matching version ${version}..." >&2
     
     # Iterate through each codename directory from KMOD_DIRS
     while IFS= read -r dir_name; do
@@ -323,19 +323,19 @@ find_codename_for_version() {
             continue
         fi
         
-        # Check if this codename directory contains our version
-        local check_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/${BUILD_PATH}/${dir_name}/${version}"
+        # Use GitHub API to check if this codename directory contains our version
+        local check_api_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${BUILD_PATH}/${dir_name}/${version}?ref=${REPO_BRANCH}"
         
-        if curl --head --silent --fail "${check_url}" > /dev/null 2>&1; then
+        if curl --silent --fail "${check_api_url}" > /dev/null 2>&1; then
             found_codename="$dir_name"
-            log "Found matching codename: ${dir_name}"
+            log "Found matching codename: ${dir_name}" >&2
             break
         fi
     done <<< "$KMOD_DIRS"
     
     # If not found via GitHub, try hardcoded fallback
     if [ -z "$found_codename" ]; then
-        log "Could not find codename via GitHub, trying fallback mapping..."
+        log "Could not find codename via GitHub, trying fallback mapping..." >&2
         local version_series=$(echo "$version" | cut -d'.' -f1,2)
         
         case "$version_series" in
@@ -344,14 +344,14 @@ find_codename_for_version() {
             "25.04") found_codename="TrueNAS-SCALE-Fangtooth" ;;
             "25.10") found_codename="TrueNAS-SCALE-Goldeye" ;;
             *)
-                echo "Unsupported TrueNAS SCALE version: ${version}."
-                echo "No precompiled kernel module found in repository."
-                echo "Please build the kernel module manually."
+                echo "Unsupported TrueNAS SCALE version: ${version}." >&2
+                echo "No precompiled kernel module found in repository." >&2
+                echo "Please build the kernel module manually." >&2
                 exit 1
                 ;;
         esac
         
-        log "Using fallback codename: ${found_codename}"
+        log "Using fallback codename: ${found_codename}" >&2
     fi
     
     echo "$found_codename"
@@ -401,8 +401,11 @@ check_version_and_download() {
 
     if [ "${need_download}" = "true" ]; then
         log "Verifying kernel module availability..."
-        if ! curl --head --silent --fail "${MODULE_URL}" > /dev/null; then
+        # Use GitHub API to check if the file exists instead of curl --head on raw URLs
+        local check_api_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${BUILD_PATH}/${TRUENAS_NAME}/${TRUENAS_VERSION}/led-ugreen.ko?ref=${REPO_BRANCH}"
+        if ! curl --silent --fail "${check_api_url}" > /dev/null 2>&1; then
             echo "Kernel module not found for TrueNAS version ${TRUENAS_VERSION}."
+            echo "Expected location: ${MODULE_URL}"
             echo "Please build the kernel module manually."
             exit 1
         fi
