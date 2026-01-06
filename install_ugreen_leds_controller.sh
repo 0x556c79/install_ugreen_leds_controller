@@ -302,21 +302,7 @@ CLONE_DIR="${PERSIST_DIR}/ugreen_leds_controller"
 # Version Detection and Module URL Setup
 # ============================================================================
 
-log "Fetching supported versions..."
-SUPPORTED_VERSIONS=()
-for URL in "${KMOD_URLS[@]}"; do
-    HTML_CONTENT=$(curl -s "$URL" || true)
-    if [ -n "${HTML_CONTENT}" ]; then
-        VERSIONS=$(echo "$HTML_CONTENT" | grep -oE 'TrueNAS-SCALE-[^/]*/[0-9]+(\.[0-9]+)*' | grep -oE '[0-9]+(\.[0-9]+)*' || true)
-        while IFS= read -r VERSION; do
-            [ -n "$VERSION" ] && SUPPORTED_VERSIONS+=("$VERSION")
-        done <<< "$VERSIONS"
-    fi
-done
-
-# Deduplicate versions
-mapfile -t SUPPORTED_VERSIONS < <(printf '%s\n' "${SUPPORTED_VERSIONS[@]}" | sort -u)
-
+# Get TrueNAS version from system
 OS_VERSION=$(grep -oP '^[0-9]+\.[0-9]+(\.[0-9]+)?(\.[0-9]+)?' /etc/version || echo "")
 if [ -z "${TRUENAS_VERSION}" ]; then
     TRUENAS_VERSION="${OS_VERSION}"
@@ -324,37 +310,63 @@ fi
 
 log "Detected TrueNAS version: ${TRUENAS_VERSION}"
 
-TRUENAS_SERIES=$(echo "$TRUENAS_VERSION" | cut -d'.' -f1,2)
-
-if [[ "$TRUENAS_SERIES" == "24.10" ]]; then
-    TRUENAS_NAME="TrueNAS-SCALE-ElectricEel"
-elif [[ "$TRUENAS_SERIES" == "24.04" ]]; then
-    TRUENAS_NAME="TrueNAS-SCALE-Dragonfish"
-elif [[ "$TRUENAS_SERIES" == "25.04" ]]; then
-    TRUENAS_NAME="TrueNAS-SCALE-Fangtooth"
-elif [[ "$TRUENAS_SERIES" == "25.10" ]]; then
-    TRUENAS_NAME="TrueNAS-SCALE-Goldeye"
-else
-    echo "Unsupported TrueNAS SCALE version series: ${TRUENAS_SERIES}."
-    echo "Please build the kernel module manually."
-    exit 1
-fi
-
-# Check if version is supported
-version_supported=false
-for v in "${SUPPORTED_VERSIONS[@]}"; do
-    if [[ "$v" == "$TRUENAS_VERSION" ]]; then
-        version_supported=true
-        break
+# Function to find the codename for the current version by checking GitHub directories
+find_codename_for_version() {
+    local version="$1"
+    local found_codename=""
+    
+    log "Searching for codename matching version ${version}..."
+    
+    # Iterate through each codename directory from KMOD_DIRS
+    while IFS= read -r dir_name; do
+        if [ -z "$dir_name" ]; then
+            continue
+        fi
+        
+        # Check if this codename directory contains our version
+        local check_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/${BUILD_PATH}/${dir_name}/${version}"
+        
+        if curl --head --silent --fail "${check_url}" > /dev/null 2>&1; then
+            found_codename="$dir_name"
+            log "Found matching codename: ${dir_name}"
+            break
+        fi
+    done <<< "$KMOD_DIRS"
+    
+    # If not found via GitHub, try hardcoded fallback
+    if [ -z "$found_codename" ]; then
+        log "Could not find codename via GitHub, trying fallback mapping..."
+        local version_series=$(echo "$version" | cut -d'.' -f1,2)
+        
+        case "$version_series" in
+            "24.10") found_codename="TrueNAS-SCALE-ElectricEel" ;;
+            "24.04") found_codename="TrueNAS-SCALE-Dragonfish" ;;
+            "25.04") found_codename="TrueNAS-SCALE-Fangtooth" ;;
+            "25.10") found_codename="TrueNAS-SCALE-Goldeye" ;;
+            *)
+                echo "Unsupported TrueNAS SCALE version: ${version}."
+                echo "No precompiled kernel module found in repository."
+                echo "Please build the kernel module manually."
+                exit 1
+                ;;
+        esac
+        
+        log "Using fallback codename: ${found_codename}"
     fi
-done
+    
+    echo "$found_codename"
+}
 
-if [ "$version_supported" = "false" ]; then
-    echo "Unsupported TrueNAS SCALE version: ${TRUENAS_VERSION}."
+# Find the codename for our version
+TRUENAS_NAME=$(find_codename_for_version "${TRUENAS_VERSION}")
+
+if [ -z "${TRUENAS_NAME}" ]; then
+    echo "Failed to determine TrueNAS codename for version ${TRUENAS_VERSION}."
     echo "Please build the kernel module manually."
     exit 1
 fi
 
+# Construct the module URL
 MODULE_URL="${REPO_URL}/${TRUENAS_NAME}/${TRUENAS_VERSION}/led-ugreen.ko"
 
 # ============================================================================
