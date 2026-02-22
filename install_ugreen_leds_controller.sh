@@ -750,14 +750,23 @@ install_kernel_module() {
         log "Kernel module download skipped (already up to date)"
     fi
 
-    # For writable systems, also copy to standard location
+    # For writable systems, also copy to standard location and run depmod
     if [ "${READONLY_ROOT}" = "false" ]; then
         if [ "${DRY_RUN}" = "true" ]; then
-            log "DRY RUN: would also copy to /lib/modules/${kernel_ver}/extra/"
+            log "DRY RUN: would also copy to /lib/modules/${kernel_ver}/extra/ and run depmod"
         else
             mkdir -p "/lib/modules/${kernel_ver}/extra" 2>/dev/null || true
-            cp "${module_dest}" "/lib/modules/${kernel_ver}/extra/led-ugreen.ko" 2>/dev/null || \
+            if cp "${module_dest}" "/lib/modules/${kernel_ver}/extra/led-ugreen.ko" 2>/dev/null; then
+                log "Copied kernel module to /lib/modules/${kernel_ver}/extra/"
+                # Register with modprobe so 'modprobe led-ugreen' works at boot
+                if depmod -a 2>/dev/null; then
+                    log "depmod completed — led-ugreen module registered with modprobe"
+                else
+                    log "Warning: depmod failed; module may not be auto-loadable via modprobe"
+                fi
+            else
                 log "Note: could not copy to /lib/modules (read-only filesystem)"
+            fi
         fi
     fi
 }
@@ -946,6 +955,50 @@ check_and_remove_existing_services
 # Scripts and Services Installation
 # ============================================================================
 
+# Patch ugreen-probe-leds to use insmod fallback instead of dkms (not available on TrueNAS)
+# Args: $1 = script path, $2 = path to led-ugreen.ko
+patch_probe_leds_script() {
+    local script_path="$1"
+    local ko_path="$2"
+
+    if [ ! -f "${script_path}" ]; then
+        return 0
+    fi
+
+    # Check if script still has the DKMS fallback block (upstream version)
+    if ! grep -q 'dkms' "${script_path}" 2>/dev/null; then
+        log "ugreen-probe-leds already patched or dkms block not present, skipping patch"
+        return 0
+    fi
+
+    log "Patching ${script_path}: replacing DKMS fallback with insmod from ${ko_path}"
+
+    # Replace everything from the DKMS fallback comment down to the closing 'fi'
+    # using awk for portable multi-line replacement
+    awk -v ko="${ko_path}" '
+        /# modprobe failed/ { in_dkms=1 }
+        in_dkms && /^    fi$/ {
+            print "        # Fallback: load module directly from persistent path (TrueNAS: dkms not available)"
+            print "        KO_PATH=\"" ko "\""
+            print "        if [ -f \"$KO_PATH\" ]; then"
+            print "            echo \"Module led-ugreen not found for kernel $(uname -r), loading from persistent path...\""
+            print "            insmod \"$KO_PATH\" || { echo \"ERROR: insmod failed for $KO_PATH\"; exit 1; }"
+            print "            echo \"Module loaded successfully via insmod\""
+            print "        else"
+            print "            echo \"ERROR: led-ugreen.ko not found at $KO_PATH\""
+            print "            echo \"Please reinstall using install_ugreen_leds_controller.sh\""
+            print "            exit 1"
+            print "        fi"
+            print "    fi"
+            in_dkms=0
+            next
+        }
+        !in_dkms { print }
+    ' "${script_path}" > "${script_path}.patched" && mv "${script_path}.patched" "${script_path}"
+    chmod +x "${script_path}"
+    log "Patched ${script_path} successfully"
+}
+
 install_scripts_and_services() {
     if [ ! -d "${CLONE_DIR}" ]; then
         log "Repository directory not found; skipping service setup"
@@ -976,6 +1029,13 @@ install_scripts_and_services() {
         fi
     done
 
+    # Patch ugreen-probe-leds in persistent scripts dir to use insmod fallback
+    if [ "${DRY_RUN}" = "true" ]; then
+        log "DRY RUN: would patch ${scripts_dest}/ugreen-probe-leds to use insmod fallback"
+    else
+        patch_probe_leds_script "${scripts_dest}/ugreen-probe-leds" "${PERSIST_DIR}/led-ugreen.ko"
+    fi
+
     # Also copy to /usr/bin if writable (backward compatibility)
     if [ "${READONLY_ROOT}" = "false" ]; then
         for script in "${scripts[@]}"; do
@@ -986,6 +1046,10 @@ install_scripts_and_services() {
                 fi
             fi
         done
+        # Also patch the /usr/bin copy
+        if [ "${DRY_RUN}" != "true" ]; then
+            patch_probe_leds_script "/usr/bin/ugreen-probe-leds" "${PERSIST_DIR}/led-ugreen.ko"
+        fi
     fi
 
     # Update and install service files
