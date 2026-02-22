@@ -332,9 +332,9 @@ uninstall_all() {
     # --- Step 1: Stop and disable systemd services ---
     log "Stopping and disabling systemd services..."
 
-    local services_to_stop=("ugreen-diskiomon.service" "ugreen-power-led.service")
+    local services_to_stop=("ugreen-diskiomon.service" "ugreen-power-led.service" "ugreen-netdevmon-multi.service")
 
-    # Find all ugreen-netdevmon@*.service instances
+    # Find any leftover ugreen-netdevmon@*.service instances
     for svc in /etc/systemd/system/multi-user.target.wants/ugreen-netdevmon@*.service; do
         if [ -e "$svc" ]; then
             local iface
@@ -359,7 +359,7 @@ uninstall_all() {
 
     # --- Step 2: Remove systemd service files ---
     log "Removing systemd service files..."
-    local service_files=("ugreen-diskiomon.service" "ugreen-netdevmon@.service" "ugreen-power-led.service")
+    local service_files=("ugreen-diskiomon.service" "ugreen-netdevmon-multi.service" "ugreen-netdevmon@.service" "ugreen-power-led.service")
     for svc_file in "${service_files[@]}"; do
         local svc_path="/etc/systemd/system/${svc_file}"
         if [ -f "${svc_path}" ]; then
@@ -428,7 +428,7 @@ uninstall_all() {
 
     # --- Step 7: Remove scripts from /usr/bin ---
     log "Removing scripts from /usr/bin..."
-    local scripts=("ugreen-diskiomon" "ugreen-netdevmon" "ugreen-probe-leds" "ugreen-power-led")
+    local scripts=("ugreen-diskiomon" "ugreen-netdevmon" "ugreen-netdevmon-multi" "ugreen-probe-leds" "ugreen-power-led")
     for script in "${scripts[@]}"; do
         if [ -f "/usr/bin/${script}" ]; then
             if [ "${DRY_RUN}" = "true" ]; then
@@ -882,45 +882,16 @@ else
 fi
 
 # ============================================================================
-# Network Interface Detection
+# Network Interface Detection (informational only — ugreen-netdevmon-multi auto-detects)
 # ============================================================================
 
-log "Detecting network interfaces..."
-mapfile -t NETWORK_INTERFACES < <(ip -br link show | awk '$1 !~ /^(lo|docker|veth|br|vb)/ && $2 == "UP" {print $1}')
-
-CHOSEN_INTERFACE=""
-if [ ${#NETWORK_INTERFACES[@]} -eq 0 ]; then
-    log "Warning: No network interfaces detected"
+log "Detecting network interfaces (for informational purposes)..."
+mapfile -t NETWORK_INTERFACES < <(ip -br link show | awk '$1 !~ /^(lo|docker|veth|br|vb)/ && $2 == "UP" {print $1}' || true)
+if [ ${#NETWORK_INTERFACES[@]} -gt 0 ]; then
+    log "Active network interfaces found: ${NETWORK_INTERFACES[*]}"
+    log "ugreen-netdevmon-multi will auto-detect and monitor all physical interfaces"
 else
-    ACTIVE_INTERFACES=()
-    for interface in "${NETWORK_INTERFACES[@]}"; do
-        if ifconfig "$interface" 2>/dev/null | grep -q "UP"; then
-            ACTIVE_INTERFACES+=("$interface")
-        fi
-    done
-
-    if [ ${#ACTIVE_INTERFACES[@]} -eq 0 ]; then
-        log "No active interfaces detected"
-    elif [ ${#ACTIVE_INTERFACES[@]} -eq 1 ]; then
-        CHOSEN_INTERFACE="${ACTIVE_INTERFACES[0]}"
-        log "Detected active interface: ${CHOSEN_INTERFACE}"
-    else
-        if [ "${AUTO_YES}" = "true" ]; then
-            CHOSEN_INTERFACE="${ACTIVE_INTERFACES[0]}"
-            log "Selected first active interface: ${CHOSEN_INTERFACE}"
-        else
-            echo "Multiple active interfaces detected: ${ACTIVE_INTERFACES[*]}"
-            echo "Please choose one interface:"
-            select CHOSEN_INTERFACE in "${ACTIVE_INTERFACES[@]}"; do
-                if [[ -n "$CHOSEN_INTERFACE" ]]; then
-                    echo "Selected: ${CHOSEN_INTERFACE}"
-                    break
-                else
-                    echo "Invalid selection. Please try again."
-                fi
-            done
-        fi
-    fi
+    log "Warning: No active network interfaces detected"
 fi
 
 # ============================================================================
@@ -931,19 +902,18 @@ check_and_remove_existing_services() {
     local service_name="ugreen-netdevmon"
     log "Checking for existing ${service_name} services..."
 
+    # Remove any old single-interface netdevmon@ instances
     for service in /etc/systemd/system/multi-user.target.wants/${service_name}@*.service; do
         if [ -e "$service" ]; then
             local interface
             interface=$(basename "$service" | sed "s/${service_name}@\(.*\)\.service/\1/")
-            log "Found existing service for interface ${interface}"
+            log "Found legacy service for interface ${interface}, removing"
 
-            if [ "${FORCE}" = "true" ] || [ "${AUTO_YES}" = "true" ]; then
-                if [ "${DRY_RUN}" != "true" ]; then
-                    systemctl stop "${service_name}@${interface}.service" 2>/dev/null || true
-                    systemctl disable "${service_name}@${interface}.service" 2>/dev/null || true
-                    rm -f "$service" || true
-                    log "Removed ${service_name}@${interface}.service"
-                fi
+            if [ "${DRY_RUN}" != "true" ]; then
+                systemctl stop "${service_name}@${interface}.service" 2>/dev/null || true
+                systemctl disable "${service_name}@${interface}.service" 2>/dev/null || true
+                rm -f "$service" || true
+                log "Removed ${service_name}@${interface}.service"
             fi
         fi
     done
@@ -1021,7 +991,7 @@ install_scripts_and_services() {
     fi
 
     # Copy scripts
-    local scripts=("ugreen-diskiomon" "ugreen-netdevmon" "ugreen-probe-leds" "ugreen-power-led")
+    local scripts=("ugreen-diskiomon" "ugreen-netdevmon" "ugreen-netdevmon-multi" "ugreen-probe-leds" "ugreen-power-led")
     for script in "${scripts[@]}"; do
         if [ -f "scripts/${script}" ]; then
             if [ "${DRY_RUN}" = "true" ]; then
@@ -1089,13 +1059,11 @@ else
     systemctl start ugreen-diskiomon.service || true
 fi
 
-if [ -n "${CHOSEN_INTERFACE}" ]; then
-    if [ "${DRY_RUN}" = "true" ]; then
-        log "DRY RUN: would enable/start ugreen-netdevmon@${CHOSEN_INTERFACE}"
-    else
-        systemctl enable "ugreen-netdevmon@${CHOSEN_INTERFACE}" || true
-        systemctl restart "ugreen-netdevmon@${CHOSEN_INTERFACE}" || true
-    fi
+if [ "${DRY_RUN}" = "true" ]; then
+    log "DRY RUN: would enable/start ugreen-netdevmon-multi.service"
+else
+    systemctl enable ugreen-netdevmon-multi.service || true
+    systemctl start ugreen-netdevmon-multi.service || true
 fi
 
 # Check for power LED configuration

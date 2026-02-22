@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.6] - 2026-02-22
+
+### Changed
+
+#### Switch to `ugreen-netdevmon-multi` for Network Interface Monitoring
+
+- **`ugreen-netdevmon-multi.service` now enabled by default**: The installer now enables and starts `ugreen-netdevmon-multi.service` instead of the templated `ugreen-netdevmon@<interface>.service`. This service auto-detects all physical ethernet interfaces (`eth*`, `enp*`, `eno*`, `enx*`) and monitors the one with the highest active link speed, switching the `netdev` LED accordingly.
+- **No interface selection prompt**: The interactive `select` prompt asking the user to choose a network interface has been removed — it is no longer needed.
+- **`ugreen-netdevmon-multi` script now installed**: Added to both the persistent `scripts/` directory and `/usr/bin/` (on writable systems).
+- **Legacy `ugreen-netdevmon@` instances cleaned up automatically**: The `check_and_remove_existing_services()` function now unconditionally removes any prior `ugreen-netdevmon@<iface>` instances during reinstall (previously only removed under `--force` or `--yes`).
+- **Uninstall updated**: `--uninstall` now stops/disables `ugreen-netdevmon-multi.service` and removes `/usr/bin/ugreen-netdevmon-multi`.
+
+#### Background
+
+The upstream project added `ugreen-netdevmon-multi` on 2026-01-19 (commit `1e4b301`). Our script was already installing the `.service` file (via the generic service-file loop), but never enabling it, and was not copying the corresponding `ugreen-netdevmon-multi` script binary. This release picks up the new service as the primary network monitoring method.
+
+### Fixed
+
+- **`ugreen-netdevmon-multi.service` installed but not started**: Service file was copied to `/etc/systemd/system/` but never enabled or started. Now correctly enabled at install time.
+
+---
+
 ## [2.0.5] - 2026-02-22
 
 ### Fixed
