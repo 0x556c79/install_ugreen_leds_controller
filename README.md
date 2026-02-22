@@ -156,10 +156,33 @@ Options:
   --use-current-dir     Use current working directory for leds_controller/ folder
   --pool-path <path>    Specify ZFS pool path under /mnt/
 
+  --uninstall           Fully uninstall: stop services, unload modules, remove files
   --dry-run             Show actions without making changes
   --yes                 Non-interactive mode (assume yes to all prompts)
   --force               Allow destructive actions
 ```
+
+### Uninstalling
+
+To preview the uninstall (no changes made):
+
+```bash
+sudo bash install_ugreen_leds_controller.sh --uninstall --dry-run
+```
+
+To fully uninstall:
+
+```bash
+sudo bash install_ugreen_leds_controller.sh --uninstall
+```
+
+For non-interactive uninstall (skips confirmation prompts):
+
+```bash
+sudo bash install_ugreen_leds_controller.sh --uninstall --yes
+```
+
+The uninstaller reverses all installation steps: stops services, removes service files, unloads kernel modules, removes configs, scripts, and optionally deletes the persistent directory. No internet access is required.
 
 ### How It Works
 

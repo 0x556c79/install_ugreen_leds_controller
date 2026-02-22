@@ -36,6 +36,7 @@ help() {
     echo "  --use-current-dir     Use current working directory for leds_controller/ folder"
     echo "  --pool-path <path>    Specify ZFS pool path under /mnt/ for persistent storage"
     echo
+    echo "  --uninstall           Fully uninstall: stop services, unload modules, remove files"
     echo "  --dry-run             Show actions without making changes"
     echo "  --yes                 Assume 'yes' to all prompts (non-interactive mode)"
     echo "  --force               Allow destructive actions (use with care)"
@@ -53,6 +54,10 @@ help() {
     echo "  # Non-interactive (for TrueNAS Init Scripts)"
     echo "  sudo bash install_ugreen_leds_controller.sh --yes"
     echo
+    echo "  # Uninstall (preview with --dry-run first)"
+    echo "  sudo bash install_ugreen_leds_controller.sh --uninstall --dry-run"
+    echo "  sudo bash install_ugreen_leds_controller.sh --uninstall"
+    echo
 }
 
 # Variables
@@ -64,26 +69,31 @@ REPO_BRANCH="gh-actions"
 BUILD_PATH="build-scripts/truenas/build"
 API_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${BUILD_PATH}?ref=${REPO_BRANCH}"
 
-echo "Fetching available TrueNAS versions from GitHub..."
-KMOD_DIRS=$(curl -s "${API_URL}" | grep -oP '"name":\s*"\K(TrueNAS-SCALE-[^"]+)' || true)
-
+# Fetch available TrueNAS builds from GitHub (deferred until after arg parsing)
+KMOD_DIRS=""
 KMOD_URLS=()
-while IFS= read -r dir_name; do
-    if [ -n "$dir_name" ]; then
-        KMOD_URLS+=("https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/${BUILD_PATH}/${dir_name}")
-    fi
-done <<< "$KMOD_DIRS"
 
-# Fallback to hardcoded list if API fails
-if [ ${#KMOD_URLS[@]} -eq 0 ]; then
-    echo "Warning: Could not fetch versions from GitHub API, using fallback list"
-    KMOD_URLS=(
-        "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-ElectricEel"
-        "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Dragonfish"
-        "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Fangtooth"
-        "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Goldeye"
-    )
-fi
+fetch_truenas_versions() {
+    echo "Fetching available TrueNAS versions from GitHub..."
+    KMOD_DIRS=$(curl -s "${API_URL}" | grep -oP '"name":\s*"\K(TrueNAS-SCALE-[^"]+)' || true)
+
+    while IFS= read -r dir_name; do
+        if [ -n "$dir_name" ]; then
+            KMOD_URLS+=("https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/${BUILD_PATH}/${dir_name}")
+        fi
+    done <<< "$KMOD_DIRS"
+
+    # Fallback to hardcoded list if API fails
+    if [ ${#KMOD_URLS[@]} -eq 0 ]; then
+        echo "Warning: Could not fetch versions from GitHub API, using fallback list"
+        KMOD_URLS=(
+            "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-ElectricEel"
+            "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Dragonfish"
+            "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Fangtooth"
+            "https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/TrueNAS-SCALE-Goldeye"
+        )
+    fi
+}
 TRUENAS_VERSION=""
 PERSIST_DIR=""
 USE_CURRENT_DIR=false
@@ -91,6 +101,7 @@ POOL_PATH=""
 DRY_RUN=false
 AUTO_YES=false
 FORCE=false
+UNINSTALL=false
 READONLY_ROOT=false
 NEED_MODULE_DOWNLOAD=false
 CLONED_REPO=false
@@ -128,6 +139,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --force)
             FORCE=true
+            shift
+            ;;
+        --uninstall)
+            UNINSTALL=true
             shift
             ;;
         *)
@@ -299,8 +314,208 @@ determine_persistent_directory
 CLONE_DIR="${PERSIST_DIR}/ugreen_leds_controller"
 
 # ============================================================================
+# Uninstall Logic
+# ============================================================================
+
+uninstall_all() {
+    local kernel_ver
+    kernel_ver=$(uname -r)
+
+    echo ""
+    echo "=========================================="
+    echo "Uninstalling UGREEN LEDs Controller"
+    echo "=========================================="
+    echo ""
+    echo "Persistent directory: ${PERSIST_DIR}"
+    echo ""
+
+    # --- Step 1: Stop and disable systemd services ---
+    log "Stopping and disabling systemd services..."
+
+    local services_to_stop=("ugreen-diskiomon.service" "ugreen-power-led.service")
+
+    # Find all ugreen-netdevmon@*.service instances
+    for svc in /etc/systemd/system/multi-user.target.wants/ugreen-netdevmon@*.service; do
+        if [ -e "$svc" ]; then
+            local iface
+            iface=$(basename "$svc" | sed 's/ugreen-netdevmon@\(.*\)\.service/\1/')
+            services_to_stop+=("ugreen-netdevmon@${iface}.service")
+        fi
+    done
+
+    for svc in "${services_to_stop[@]}"; do
+        if systemctl is-active --quiet "${svc}" 2>/dev/null || systemctl is-enabled --quiet "${svc}" 2>/dev/null; then
+            if [ "${DRY_RUN}" = "true" ]; then
+                log "DRY RUN: would stop and disable ${svc}"
+            else
+                systemctl stop "${svc}" 2>/dev/null || true
+                systemctl disable "${svc}" 2>/dev/null || true
+                log "Stopped and disabled ${svc}"
+            fi
+        else
+            log "Service ${svc} not found, skipping"
+        fi
+    done
+
+    # --- Step 2: Remove systemd service files ---
+    log "Removing systemd service files..."
+    local service_files=("ugreen-diskiomon.service" "ugreen-netdevmon@.service" "ugreen-power-led.service")
+    for svc_file in "${service_files[@]}"; do
+        local svc_path="/etc/systemd/system/${svc_file}"
+        if [ -f "${svc_path}" ]; then
+            if [ "${DRY_RUN}" = "true" ]; then
+                log "DRY RUN: would remove ${svc_path}"
+            else
+                rm -f "${svc_path}"
+                log "Removed ${svc_path}"
+            fi
+        else
+            log "Service file ${svc_path} not found, skipping"
+        fi
+    done
+
+    # --- Step 3: Reload systemd daemon ---
+    if [ "${DRY_RUN}" = "true" ]; then
+        log "DRY RUN: would reload systemd daemon"
+    else
+        systemctl daemon-reload
+        log "Reloaded systemd daemon"
+    fi
+
+    # --- Step 4: Unload kernel modules ---
+    log "Unloading kernel modules..."
+    local modules_to_unload=("led-ugreen" "ledtrig-netdev" "ledtrig-oneshot" "i2c-dev")
+    for mod in "${modules_to_unload[@]}"; do
+        if lsmod 2>/dev/null | grep -q "^${mod//-/_}"; then
+            if [ "${DRY_RUN}" = "true" ]; then
+                log "DRY RUN: would unload module ${mod}"
+            else
+                if rmmod "${mod}" 2>/dev/null; then
+                    log "Unloaded module ${mod}"
+                else
+                    log "Warning: could not unload module ${mod} (may be in use by other subsystems)"
+                fi
+            fi
+        else
+            log "Module ${mod} not loaded, skipping"
+        fi
+    done
+
+    # --- Step 5: Remove module autoload configuration ---
+    if [ -f "/etc/modules-load.d/ugreen-led.conf" ]; then
+        if [ "${DRY_RUN}" = "true" ]; then
+            log "DRY RUN: would remove /etc/modules-load.d/ugreen-led.conf"
+        else
+            rm -f "/etc/modules-load.d/ugreen-led.conf"
+            log "Removed /etc/modules-load.d/ugreen-led.conf"
+        fi
+    else
+        log "Module autoload config not found, skipping"
+    fi
+
+    # --- Step 6: Remove kernel module from system directory ---
+    local sys_module="/lib/modules/${kernel_ver}/extra/led-ugreen.ko"
+    if [ -f "${sys_module}" ]; then
+        if [ "${DRY_RUN}" = "true" ]; then
+            log "DRY RUN: would remove ${sys_module}"
+        else
+            rm -f "${sys_module}"
+            log "Removed ${sys_module}"
+        fi
+    else
+        log "System kernel module ${sys_module} not found, skipping"
+    fi
+
+    # --- Step 7: Remove scripts from /usr/bin ---
+    log "Removing scripts from /usr/bin..."
+    local scripts=("ugreen-diskiomon" "ugreen-netdevmon" "ugreen-probe-leds" "ugreen-power-led")
+    for script in "${scripts[@]}"; do
+        if [ -f "/usr/bin/${script}" ]; then
+            if [ "${DRY_RUN}" = "true" ]; then
+                log "DRY RUN: would remove /usr/bin/${script}"
+            else
+                rm -f "/usr/bin/${script}"
+                log "Removed /usr/bin/${script}"
+            fi
+        else
+            log "/usr/bin/${script} not found, skipping"
+        fi
+    done
+
+    # --- Step 8: Remove system configuration ---
+    if [ -f "/etc/ugreen-leds.conf" ]; then
+        if [ "${DRY_RUN}" = "true" ]; then
+            log "DRY RUN: would remove /etc/ugreen-leds.conf"
+        else
+            rm -f "/etc/ugreen-leds.conf"
+            log "Removed /etc/ugreen-leds.conf"
+        fi
+    else
+        log "System config /etc/ugreen-leds.conf not found, skipping"
+    fi
+
+    # --- Step 9: Remove persistent directory ---
+    if [ -d "${PERSIST_DIR}" ]; then
+        if [ "${AUTO_YES}" != "true" ] && [ "${DRY_RUN}" != "true" ]; then
+            echo ""
+            echo "=========================================="
+            echo "WARNING: About to delete persistent directory"
+            echo "=========================================="
+            echo ""
+            echo "This will permanently remove:"
+            echo "  ${PERSIST_DIR}"
+            echo ""
+            echo "Contents include: kernel module, scripts, config backup, installer copy."
+            echo ""
+            read -r -p "Delete persistent directory? (y/n): " confirm
+            if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+                log "Skipped persistent directory removal (user declined)"
+                echo ""
+                echo "Uninstall completed (persistent directory preserved)."
+                return 0
+            fi
+        fi
+
+        if [ "${DRY_RUN}" = "true" ]; then
+            log "DRY RUN: would remove persistent directory ${PERSIST_DIR}"
+        else
+            rm -rf "${PERSIST_DIR}"
+            log "Removed persistent directory ${PERSIST_DIR}"
+        fi
+    else
+        log "Persistent directory ${PERSIST_DIR} not found, skipping"
+    fi
+
+    echo ""
+    echo "=========================================="
+    if [ "${DRY_RUN}" = "true" ]; then
+        echo "Uninstall Dry Run Complete!"
+        echo "=========================================="
+        echo ""
+        echo "No changes were made. Review the actions above."
+        echo "Run without --dry-run to perform the actual uninstall."
+    else
+        echo "Uninstall Complete!"
+        echo "=========================================="
+        echo ""
+        echo "All UGREEN LEDs controller components have been removed."
+        echo "A reboot is recommended to ensure a clean state."
+    fi
+    echo ""
+}
+
+# Early exit for uninstall mode (no internet access needed)
+if [ "${UNINSTALL}" = "true" ]; then
+    uninstall_all
+    exit 0
+fi
+
+# ============================================================================
 # Version Detection and Module URL Setup
 # ============================================================================
+
+# Fetch TrueNAS versions (only needed for install flow)
+fetch_truenas_versions
 
 # Get TrueNAS version from system
 OS_VERSION=$(grep -oP '^[0-9]+\.[0-9]+(\.[0-9]+)?(\.[0-9]+)?' /etc/version || echo "")

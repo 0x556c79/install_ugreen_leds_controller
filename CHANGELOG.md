@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0] - 2026-02-22
+
+### Added
+
+#### Uninstall Feature ([#10](https://github.com/0x556c79/install_ugreen_leds_controller/issues/10))
+- **`--uninstall` flag**: Fully reverses installation in 9 steps:
+  1. Stops and disables all `ugreen-*` systemd services
+  2. Removes systemd service files from `/etc/systemd/system/`
+  3. Reloads systemd daemon
+  4. Unloads kernel modules (`led-ugreen`, `ledtrig-netdev`, `ledtrig-oneshot`, `i2c-dev`)
+  5. Removes `/etc/modules-load.d/ugreen-led.conf`
+  6. Removes kernel module from `/lib/modules/*/extra/`
+  7. Removes scripts from `/usr/bin/`
+  8. Removes `/etc/ugreen-leds.conf`
+  9. Optionally deletes the persistent directory (with confirmation prompt)
+- **No internet required**: Uninstall path skips all GitHub API calls
+- **Compatible with existing flags**: Works with `--dry-run`, `--yes`, `--persist-dir`
+
+### Changed
+
+#### Script Architecture
+- **Deferred GitHub API calls**: Version fetching wrapped in `fetch_truenas_versions()` function, only called during install flow
+- **Early exit gate**: `--uninstall` exits before version detection, cloning, or any install steps
+
+---
+
 ## [2.0.2] - 2024-11-08
 
 ### Added
