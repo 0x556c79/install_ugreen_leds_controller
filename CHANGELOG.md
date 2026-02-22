@@ -21,6 +21,7 @@ The upstream project added `ugreen-netdevmon-multi` on 2026-01-19 (commit `1e4b3
 ### Fixed
 
 - **`ugreen-netdevmon-multi.service` installed but not started**: Service file was copied to `/etc/systemd/system/` but never enabled or started. Now correctly enabled at install time.
+- **Suppress false-alarm `insmod` warning when module already loaded**: The installer now checks `lsmod` before attempting `insmod`; if `led-ugreen` is already in the kernel (e.g. `rmmod` failed during uninstall because the module was in use), a clean informational message is logged instead of a spurious warning.
 
 ---
 
