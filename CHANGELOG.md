@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.1.1] - 2026-02-22
+## [2.0.5] - 2026-02-22
 
 ### Fixed
 
@@ -14,7 +14,7 @@ All notable changes to this project will be documented in this file.
 
 ---
 
-## [2.1.0] - 2026-02-22
+## [2.0.4] - 2026-02-22
 
 ### Added
 
@@ -39,6 +39,30 @@ All notable changes to this project will be documented in this file.
 
 - **Deferred GitHub API calls**: Version fetching wrapped in `fetch_truenas_versions()` function, only called during install flow
 - **Early exit gate**: `--uninstall` exits before version detection, cloning, or any install steps
+
+---
+
+## [2.0.3] - 2026-01-07
+
+### Added
+
+#### TrueNAS SCALE 25.10 (Goldeye) Support ([#9](https://github.com/0x556c79/install_ugreen_leds_controller/pull/9))
+
+- Added `TrueNAS-SCALE-Goldeye` to the list of supported codenames
+- Version series `25.10.x` now correctly mapped to the Goldeye build directory
+
+### Changed
+
+#### Version Detection Refactor
+
+- **Streamlined GitHub discovery**: Replaced dual-check version validation with a single, streamlined GitHub API lookup via `find_codename_for_version()`
+- Eliminated redundant network calls and simplified the version → codename mapping code
+
+### Fixed
+
+#### Log Output Handling
+
+- **stderr redirect for log calls inside functions**: Diagnostic `log` messages inside functions used in command substitution (e.g. `find_codename_for_version`) were leaking into captured output, breaking variable assignment. All such calls now redirect to stderr (`log "..." >&2`).
 
 ---
 
