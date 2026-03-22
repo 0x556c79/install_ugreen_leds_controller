@@ -616,9 +616,7 @@ check_version_and_download() {
 
     if [ "${need_download}" = "true" ]; then
         log "Verifying kernel module availability..."
-        # Use GitHub API to check if the file exists instead of curl --head on raw URLs
-        local check_api_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${BUILD_PATH}/${TRUENAS_NAME}/${TRUENAS_VERSION}/led-ugreen.ko?ref=${REPO_BRANCH}"
-        if ! curl --silent --fail "${check_api_url}" > /dev/null 2>&1; then
+        if ! curl --silent --head --fail "${MODULE_URL}" > /dev/null 2>&1; then
             echo "Kernel module not found for TrueNAS version ${TRUENAS_VERSION}."
             echo "Expected location: ${MODULE_URL}"
             echo "Please build the kernel module manually."
