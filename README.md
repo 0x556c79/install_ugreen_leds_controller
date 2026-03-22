@@ -248,7 +248,8 @@ If you have existing installation in system directories:
 
 Use at your own risk.
 
-Tested and developed on a Ugreen DXP8800 Plus NAS. <br>
+Tested and developed on a Ugreen DXP8800 Plus NAS.
 Also confirmed working on a UGREEN DXP4800 with TrueNAS SCALE 25.04.2.5 (<https://github.com/0x556c79/install_ugreen_leds_controller/issues/6>) (with Version 1.0 of the script)
+Works on UGREEN DXP2800
 
 The author is not responsible for damage caused by running this script.
