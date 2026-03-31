@@ -616,7 +616,7 @@ check_version_and_download() {
 
     if [ "${need_download}" = "true" ]; then
         log "Verifying kernel module availability..."
-        if ! curl --silent --head --fail "${MODULE_URL}" > /dev/null 2>&1; then
+        if ! curl --silent --location --head --fail "${MODULE_URL}" > /dev/null 2>&1; then
             echo "Kernel module not found for TrueNAS version ${TRUENAS_VERSION}."
             echo "Expected location: ${MODULE_URL}"
             echo "Please build the kernel module manually."
