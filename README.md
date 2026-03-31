@@ -12,6 +12,18 @@ Run the following command to install:</br>
 curl -sf https://raw.githubusercontent.com/0x556c79/install_ugreen_leds_controller/main/install_ugreen_leds_controller.sh -o install_ugreen_leds_controller.sh ; sudo bash install_ugreen_leds_controller.sh
 ```
 
+## Compatibility
+
+This installer has been confirmed working on the following models. For general module compatibility (other OS/distros), refer to the [upstream project](https://github.com/miskcoo/ugreen_leds_controller).
+
+| Model | Notes | Reference |
+|---|---|---|
+| UGREEN DXP8800 Plus | Developed & tested on this model | — |
+| UGREEN DXP4800 | Tested with TrueNAS SCALE 25.04.2.5, script v1.0 | [#6](https://github.com/0x556c79/install_ugreen_leds_controller/issues/6) |
+| UGREEN DXP2800 | | [#12](https://github.com/0x556c79/install_ugreen_leds_controller/pull/12) |
+
+If you've confirmed the script works on another model, feel free to open an issue or pull request!
+
 ## TrueNAS Scale Read-Only Filesystem Support
 
 **NEW**: The installer now supports TrueNAS Scale systems with read-only root filesystems (common when Nvidia drivers are installed).
@@ -246,12 +258,4 @@ If you have existing installation in system directories:
 
 ## Disclaimer
 
-Use at your own risk.
-
-Tested and developed on a Ugreen DXP8800 Plus NAS.
-
-Also confirmed working on a UGREEN DXP4800 with TrueNAS SCALE 25.04.2.5 (<https://github.com/0x556c79/install_ugreen_leds_controller/issues/6>) (with Version 1.0 of the script)
-
-Works on UGREEN DXP2800
-
-The author is not responsible for damage caused by running this script.
+Use at your own risk. The author is not responsible for any damage caused by running this script.
