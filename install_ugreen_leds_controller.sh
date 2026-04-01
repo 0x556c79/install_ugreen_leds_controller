@@ -75,7 +75,7 @@ KMOD_URLS=()
 
 fetch_truenas_versions() {
     echo "Fetching available TrueNAS versions from GitHub..."
-    KMOD_DIRS=$(curl -s "${API_URL}" | grep -oP '"name":\s*"\K(TrueNAS-SCALE-[^"]+)' || true)
+    KMOD_DIRS=$(curl -s --connect-timeout 10 --max-time 30 "${API_URL}" | sed -n 's/.*"name":[[:space:]]*"\(TrueNAS-SCALE-[^"]*\)".*/\1/p' || true)
 
     while IFS= read -r dir_name; do
         if [ -n "$dir_name" ]; then
@@ -391,7 +391,7 @@ uninstall_all() {
     log "Unloading kernel modules..."
     local modules_to_unload=("led-ugreen" "ledtrig-netdev" "ledtrig-oneshot" "i2c-dev")
     for mod in "${modules_to_unload[@]}"; do
-        if lsmod 2>/dev/null | grep -q "^${mod//-/_}"; then
+        if [ -d "/sys/module/${mod//-/_}" ]; then
             if [ "${DRY_RUN}" = "true" ]; then
                 log "DRY RUN: would unload module ${mod}"
             else
@@ -523,7 +523,7 @@ fi
 fetch_truenas_versions
 
 # Get TrueNAS version from system
-OS_VERSION=$(grep -oP '^[0-9]+\.[0-9]+(\.[0-9]+)?(\.[0-9]+)?' /etc/version || echo "")
+OS_VERSION=$(sed -n 's/^\([0-9]\{1,\}\.[0-9]\{1,\}\(\.[0-9]\{1,\}\)*\).*/\1/p' /etc/version | head -1)
 if [ -z "${TRUENAS_VERSION}" ]; then
     TRUENAS_VERSION="${OS_VERSION}"
 fi
@@ -547,7 +547,7 @@ find_codename_for_version() {
         # Use GitHub API to check if this codename directory contains our version
         local check_api_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${BUILD_PATH}/${dir_name}/${version}?ref=${REPO_BRANCH}"
 
-        if curl --silent --fail "${check_api_url}" > /dev/null 2>&1; then
+        if curl --silent --fail --connect-timeout 10 --max-time 30 "${check_api_url}" > /dev/null 2>&1; then
             found_codename="$dir_name"
             log "Found matching codename: ${dir_name}" >&2
             break
@@ -626,7 +626,7 @@ check_version_and_download() {
 
     if [ "${need_download}" = "true" ]; then
         log "Verifying kernel module availability..."
-        if ! curl --silent --location --head --fail "${MODULE_URL}" > /dev/null 2>&1; then
+        if ! curl --silent --location --head --fail --connect-timeout 10 --max-time 30 "${MODULE_URL}" > /dev/null 2>&1; then
             echo "Kernel module not found for TrueNAS version ${TRUENAS_VERSION}."
             echo "Expected location: ${MODULE_URL}"
             echo "Please build the kernel module manually."
@@ -654,7 +654,8 @@ check_and_remount_readonly() {
 
     mount_opts=$(mount | grep " on ${mount_point} " | awk '{print $6}' | tr -d '()' || echo "")
 
-    if [[ "${mount_opts}" == *"ro"* ]]; then
+    # Match 'ro' as a distinct comma-separated mount option (avoids matching 'proc', 'errors=remount-ro', etc.)
+    if echo ",${mount_opts}," | grep -q ',ro,'; then
         log "Detected read-only filesystem at ${mount_point}"
         if mount -o remount,rw "${mount_point}" 2>/dev/null; then
             log "Successfully remounted ${mount_point} as read-write"
@@ -678,6 +679,8 @@ fi
 BOOT_POOL_PATH="boot-pool/ROOT/${OS_VERSION}"
 if [ -d "/${BOOT_POOL_PATH}/etc" ]; then
     check_and_remount_readonly "/${BOOT_POOL_PATH}/etc" 2>/dev/null || true
+else
+    log "Boot pool path /${BOOT_POOL_PATH}/etc not found, skipping /etc remount"
 fi
 
 # ============================================================================
@@ -749,7 +752,7 @@ install_kernel_module() {
         if [ "${DRY_RUN}" = "true" ]; then
             log "DRY RUN: would download module to ${module_dest}"
         else
-            if ! curl -sSL -o "${module_dest}" "${MODULE_URL}"; then
+            if ! curl -sSL --connect-timeout 10 --max-time 120 -o "${module_dest}" "${MODULE_URL}"; then
                 echo "Kernel module download failed." >&2
                 exit 1
             fi
@@ -810,14 +813,28 @@ if [ "${DRY_RUN}" = "true" ]; then
     log "DRY RUN: would load kernel modules"
 else
     modprobe -a i2c-dev ledtrig-oneshot ledtrig-netdev || true
-    # Load custom module using insmod with absolute path
-    if [ -f "${PERSIST_DIR}/led-ugreen.ko" ]; then
-        if lsmod 2>/dev/null | grep -q "^led_ugreen"; then
-            log "Module led-ugreen already loaded, skipping insmod"
-        else
-            insmod "${PERSIST_DIR}/led-ugreen.ko" || log "Warning: failed to load led-ugreen module"
+
+    # Check if led-ugreen is already loaded via sysfs (more reliable than lsmod which may not be in PATH)
+    # Kernel normalizes dashes to underscores, so the module dir is /sys/module/led_ugreen
+    MODULE_LOADED=false
+    if [ -d "/sys/module/led_ugreen" ]; then
+        MODULE_LOADED=true
+    fi
+
+    if [ "${MODULE_LOADED}" = "true" ] && [ "${NEED_MODULE_DOWNLOAD}" = "false" ]; then
+        # Module already loaded and no new version downloaded — nothing to do
+        log "Module led-ugreen already loaded and up to date, skipping"
+    elif [ -f "${PERSIST_DIR}/led-ugreen.ko" ]; then
+        if [ "${MODULE_LOADED}" = "true" ]; then
+            # New version downloaded — unload old module before loading new one
+            log "New module version downloaded, reloading led-ugreen..."
+            rmmod led-ugreen 2>/dev/null || true
         fi
+        insmod "${PERSIST_DIR}/led-ugreen.ko" || log "Warning: failed to load led-ugreen module"
     elif [ -f "/lib/modules/$(uname -r)/extra/led-ugreen.ko" ]; then
+        if [ "${MODULE_LOADED}" = "true" ]; then
+            rmmod led-ugreen 2>/dev/null || true
+        fi
         modprobe led-ugreen || log "Warning: failed to load led-ugreen module"
     else
         log "Warning: led-ugreen.ko not found"
@@ -1088,7 +1105,7 @@ else
 fi
 
 # Check for power LED configuration
-if [ -f "$CONFIG_FILE" ] && grep -qP '^BLINK_TYPE_POWER=(?!none$).+' "$CONFIG_FILE" 2>/dev/null; then
+if [ -f "$CONFIG_FILE" ] && grep -q '^BLINK_TYPE_POWER=' "$CONFIG_FILE" 2>/dev/null && ! grep -q '^BLINK_TYPE_POWER=none$' "$CONFIG_FILE" 2>/dev/null; then
     log "Enabling ugreen-power-led.service"
     if [ "${DRY_RUN}" != "true" ]; then
         systemctl enable ugreen-power-led.service || true

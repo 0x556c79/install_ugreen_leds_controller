@@ -2,6 +2,87 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.8] - 2026-04-01
+
+### Fixed
+
+#### Kernel Module Loaded Detection
+
+- Replaced `lsmod | grep` with `/sys/module/` sysfs directory check for
+  detecting whether kernel modules are already loaded. The previous approach
+  could silently fail in certain environments, causing `insmod` to error with
+  "File exists" on every re-run.
+
+#### Read-Only Filesystem Detection
+
+- Fixed false-positive read-only detection when mount options contained
+  substrings like `errors=remount-ro`. Now matches `ro` as a distinct
+  comma-separated mount option.
+
+### Improved
+
+#### Smart Module Reload Logic
+
+- Module loading now skips entirely when `led-ugreen` is already loaded and
+  no new version was downloaded — eliminating the redundant `insmod` error
+  on re-runs.
+- When a new module version is downloaded, the old module is automatically
+  unloaded (`rmmod`) before loading the new one (hot-swap).
+
+#### Network Resilience
+
+- Added `--connect-timeout 10` and `--max-time 30` to all `curl` commands
+  (120s for module download) to prevent indefinite hangs on network issues.
+
+#### Portability
+
+- Replaced all `grep -oP` (PCRE) usage with portable `sed` and standard
+  `grep` alternatives for GitHub API JSON parsing, `/etc/version` extraction,
+  and power LED configuration checks.
+
+#### Logging
+
+- Added log message when boot pool path is not found, improving
+  troubleshooting visibility.
+
+---
+
+## [2.0.7] - 2026-04-01
+
+### Changed
+
+#### README: Compatibility Table & Disclaimer Cleanup
+
+- Added dedicated **Compatibility** section (placed after Quick Install) with a
+  table of confirmed working UGREEN NAS models, references to issues/PRs, and a
+  link to the upstream project for broader OS compatibility.
+- Reduced **Disclaimer** to a single liability note — hardware compatibility info
+  moved to the new section.
+
+#### Installer Output Improvements
+
+- Added `log_separator()` helper to visually separate install phases in output
+- Added color-coded service status summary at the end of installation
+- Fixed double cleanup message caused by redundant explicit `cleanup()` call
+  (the `EXIT` trap already handles it)
+
+### Fixed
+
+#### Kernel Module Availability Check
+
+- Replaced GitHub API `contents` endpoint call with a direct HTTP `HEAD` request
+  to `MODULE_URL` when checking for kernel module availability. This avoids
+  potential GitHub API rate limiting, simplifies the verification logic, and
+  adds `-L` to follow URL redirects.
+  — by @sh4tteredd in [#12](https://github.com/0x556c79/install_ugreen_leds_controller/pull/12)
+
+#### Shellcheck Warnings
+
+- Declare `version_series` separately to avoid masking return value (SC2155)
+- Quote glob expansion in `for` loop to prevent word splitting (SC2231)
+
+---
+
 ## [2.0.6] - 2026-02-22
 
 ### Changed
