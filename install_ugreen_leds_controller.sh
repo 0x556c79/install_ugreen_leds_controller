@@ -170,6 +170,11 @@ log() {
     echo "[$ts] $msg"
 }
 
+# Separator helper
+log_separator() {
+    printf '%*s\n' "80" '' | tr ' ' '-'
+}
+
 
 # ============================================================================
 # Persistent Directory Determination
@@ -523,36 +528,38 @@ if [ -z "${TRUENAS_VERSION}" ]; then
     TRUENAS_VERSION="${OS_VERSION}"
 fi
 
+log_separator
 log "Detected TrueNAS version: ${TRUENAS_VERSION}"
 
 # Function to find the codename for the current version by checking GitHub directories
 find_codename_for_version() {
     local version="$1"
     local found_codename=""
-    
+
     log "Searching for codename matching version ${version}..." >&2
-    
+
     # Iterate through each codename directory from KMOD_DIRS
     while IFS= read -r dir_name; do
         if [ -z "$dir_name" ]; then
             continue
         fi
-        
+
         # Use GitHub API to check if this codename directory contains our version
         local check_api_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${BUILD_PATH}/${dir_name}/${version}?ref=${REPO_BRANCH}"
-        
+
         if curl --silent --fail "${check_api_url}" > /dev/null 2>&1; then
             found_codename="$dir_name"
             log "Found matching codename: ${dir_name}" >&2
             break
         fi
     done <<< "$KMOD_DIRS"
-    
+
     # If not found via GitHub, try hardcoded fallback
     if [ -z "$found_codename" ]; then
         log "Could not find codename via GitHub, trying fallback mapping..." >&2
-        local version_series=$(echo "$version" | cut -d'.' -f1,2)
-        
+        local version_series
+        version_series=$(echo "$version" | cut -d'.' -f1,2)
+
         case "$version_series" in
             "24.10") found_codename="TrueNAS-SCALE-ElectricEel" ;;
             "24.04") found_codename="TrueNAS-SCALE-Dragonfish" ;;
@@ -565,10 +572,10 @@ find_codename_for_version() {
                 exit 1
                 ;;
         esac
-        
+
         log "Using fallback codename: ${found_codename}" >&2
     fi
-    
+
     echo "$found_codename"
 }
 
@@ -583,6 +590,9 @@ fi
 
 # Construct the module URL
 MODULE_URL="${REPO_URL}/${TRUENAS_NAME}/${TRUENAS_VERSION}/led-ugreen.ko"
+
+log_separator
+log "Module URL: ${MODULE_URL}"
 
 # ============================================================================
 # Version Tracking and Smart Download Logic
@@ -698,6 +708,9 @@ copy_installer_to_persistent_dir
 # Clone Repository
 # ============================================================================
 
+log_separator
+log "Preparing repository..."
+
 if [ ! -d "${CLONE_DIR}/.git" ]; then
     log "Cloning ugreen_leds_controller repository..."
     if [ "${DRY_RUN}" = "true" ]; then
@@ -722,6 +735,9 @@ fi
 # ============================================================================
 # Kernel Module Installation
 # ============================================================================
+
+log_separator
+log "Installing kernel module..."
 
 install_kernel_module() {
     local module_dest="${PERSIST_DIR}/led-ugreen.ko"
@@ -775,6 +791,7 @@ install_kernel_module
 # Module Loading Configuration
 # ============================================================================
 
+log_separator
 log "Configuring kernel module loading..."
 if [ "${DRY_RUN}" = "true" ]; then
     log "DRY RUN: would create /etc/modules-load.d/ugreen-led.conf"
@@ -810,6 +827,9 @@ fi
 # ============================================================================
 # Configuration File Setup
 # ============================================================================
+
+log_separator
+log "Setting up configuration..."
 
 CONFIG_FILE="${PERSIST_DIR}/ugreen-leds.conf"
 TEMPLATE_CONFIG="${CLONE_DIR}/scripts/ugreen-leds.conf"
@@ -901,7 +921,7 @@ check_and_remove_existing_services() {
     log "Checking for existing ${service_name} services..."
 
     # Remove any old single-interface netdevmon@ instances
-    for service in /etc/systemd/system/multi-user.target.wants/${service_name}@*.service; do
+    for service in "/etc/systemd/system/multi-user.target.wants/${service_name}@"*.service; do
         if [ -e "$service" ]; then
             local interface
             interface=$(basename "$service" | sed "s/${service_name}@\(.*\)\.service/\1/")
@@ -971,13 +991,15 @@ patch_probe_leds_script() {
     log "Patched ${script_path} successfully"
 }
 
+log_separator
+log "Installing scripts and services..."
+
 install_scripts_and_services() {
     if [ ! -d "${CLONE_DIR}" ]; then
         log "Repository directory not found; skipping service setup"
         return 0
     fi
 
-    log "Installing scripts and services..."
     cd "${CLONE_DIR}"
 
     # Create scripts directory in persistent location
@@ -1048,6 +1070,7 @@ install_scripts_and_services
 # Service Enablement
 # ============================================================================
 
+log_separator
 log "Enabling and starting services..."
 
 if [ "${DRY_RUN}" = "true" ]; then
@@ -1076,19 +1099,46 @@ fi
 # ============================================================================
 # Completion
 # ============================================================================
-
-cleanup
-
 echo ""
 echo "=========================================="
 echo "Installation Complete!"
 echo "=========================================="
+# Service Status Summary
+print_service_status() {
+    local service="$1"
+    local state
+    local sub_state
+    state=$(systemctl show -p ActiveState --value "${service}" 2>/dev/null)
+    sub_state=$(systemctl show -p SubState --value "${service}" 2>/dev/null)
+
+    if [ "${state}" = "active" ]; then
+        printf "  \e[32m●\e[0m %-45s \e[2m%s (%s)\e[0m\n" "${service}" "${state}" "${sub_state}"
+    elif [ "${state}" = "inactive" ]; then
+        printf "  \e[2m●\e[0m %-45s \e[2m%s (%s)\e[0m\n" "${service}" "${state}" "${sub_state}"
+    else
+        printf "  \e[31m●\e[0m %-45s \e[2m%s (%s)\e[0m\n" "${service}" "${state}" "${sub_state}"
+    fi
+}
+
+if [ "${DRY_RUN}" != "true" ]; then
+    echo ""
+    echo "Service Status:"
+    print_service_status "ugreen-diskiomon.service"
+    print_service_status "ugreen-netdevmon-multi.service"
+    if systemctl list-unit-files "ugreen-power-led.service" &>/dev/null; then
+        print_service_status "ugreen-power-led.service"
+    fi
+    print_service_status "ugreen-probe-leds.service"
+fi
 echo ""
 echo "Persistent directory: ${PERSIST_DIR}"
 echo "Configuration: /etc/ugreen-leds.conf"
+log_separator
 echo ""
 echo "For TrueNAS Init/Shutdown Scripts, use:"
+echo "===================================================================================="
 echo "  ${PERSIST_DIR}/install_ugreen_leds_controller.sh --yes"
+echo "===================================================================================="
 echo ""
 echo "Reboot recommended to verify all services start correctly."
 echo ""
