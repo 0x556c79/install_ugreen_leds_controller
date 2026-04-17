@@ -637,7 +637,7 @@ resolve_module_url() {
     candidates=("$running_version")
 
     if [[ "$version_patch_str" =~ ^[0-9]+$ ]]; then
-        version_patch=$(( version_patch_str ))
+        version_patch=$(( 10#$version_patch_str ))
         # For 4-part versions (e.g. 25.04.0.1), also try the 3-part form
         local three_part="${version_major}.${version_patch}"
         if [ "$three_part" != "$running_version" ]; then
