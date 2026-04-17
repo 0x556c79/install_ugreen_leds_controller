@@ -19,6 +19,7 @@
 # Claude / Anthropic projects
 .claude/
 .claudeignore
+CLAUDE.md
 
 # Other popular coding agents
 .roocode/

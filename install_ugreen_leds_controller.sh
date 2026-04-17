@@ -592,7 +592,107 @@ fi
 MODULE_URL="${REPO_URL}/${TRUENAS_NAME}/${TRUENAS_VERSION}/led-ugreen.ko"
 
 log_separator
-log "Module URL: ${MODULE_URL}"
+
+# ============================================================================
+# Module URL Probing and Fallback Resolution
+# ============================================================================
+
+# Probes whether a pre-built module URL is reachable.
+# Returns: 0=available (HTTP 200), 1=not found (HTTP 404), 2=transient/network error
+probe_module_url() {
+    local url="$1"
+    local http_code
+    http_code=$(curl --silent --location --head \
+        --write-out '%{http_code}' \
+        --output /dev/null \
+        --connect-timeout 10 --max-time 30 \
+        "${url}" 2>/dev/null) || http_code="000"
+    case "$http_code" in
+        200) return 0 ;;
+        404) return 1 ;;
+        *)   return 2 ;;
+    esac
+}
+
+# Resolves the best available pre-built module URL starting from running_version,
+# then decrementing the patch component (third dot-field) within the same YY.MM train.
+# Never crosses major boundaries (e.g. 25.04 never falls back to 24.10).
+# On success: updates global MODULE_URL. Emits a warning block if fallback is used.
+# On total failure: prints error and exits (same behaviour as the current script).
+resolve_module_url() {
+    local running_version="$1"
+    local codename="$2"
+    local version_major
+    local version_patch_str
+    local version_patch
+    local candidate_url
+    local probe_result
+    local is_first
+
+    version_major=$(echo "$running_version" | cut -d. -f1,2)
+    version_patch_str=$(echo "$running_version" | cut -d. -f3)
+
+    # Build ordered candidate list: exact running version, then descending patch variants
+    local -a candidates
+    candidates=("$running_version")
+
+    if [[ "$version_patch_str" =~ ^[0-9]+$ ]]; then
+        version_patch=$(( version_patch_str ))
+        # For 4-part versions (e.g. 25.04.0.1), also try the 3-part form
+        local three_part="${version_major}.${version_patch}"
+        if [ "$three_part" != "$running_version" ]; then
+            candidates+=("$three_part")
+        fi
+        local p
+        p=$(( version_patch - 1 ))
+        while [ "$p" -ge 0 ]; do
+            candidates+=("${version_major}.${p}")
+            p=$(( p - 1 ))
+        done
+    fi
+    # If patch is non-numeric, candidates contains only running_version (no fallback)
+
+    is_first=true
+    for candidate in "${candidates[@]}"; do
+        candidate_url="${REPO_URL}/${codename}/${candidate}/led-ugreen.ko"
+        log "Probing module availability: ${candidate_url}"
+
+        probe_result=0
+        probe_module_url "$candidate_url" || probe_result=$?
+        if [ "$probe_result" -eq 2 ]; then
+            # Transient error — retry once before moving to next candidate
+            log "Transient error for ${candidate}, retrying..."
+            probe_result=0
+            probe_module_url "$candidate_url" || probe_result=$?
+        fi
+
+        if [ "$probe_result" -eq 0 ]; then
+            MODULE_URL="$candidate_url"
+            if [ "$is_first" != "true" ]; then
+                echo ""
+                echo "=========================================="
+                echo "WARNING: Using fallback kernel module"
+                echo "=========================================="
+                echo ""
+                echo "  WARNING: Kernel sources for TrueNAS SCALE ${running_version} are unavailable."
+                echo "           Falling back to sources from ${candidate}."
+                echo "           The kernel module will be built against an older minor release;"
+                echo "           if the kernel ABI has changed, the module may not load correctly."
+                echo ""
+                log "Using fallback module for ${candidate} (running TrueNAS ${running_version})"
+            fi
+            return 0
+        fi
+
+        is_first=false
+    done
+
+    # All candidates exhausted — preserve original error behaviour
+    echo "Kernel module not found for TrueNAS SCALE ${running_version}."
+    echo "No fallback module available within the ${version_major} release train."
+    echo "Please build the kernel module manually."
+    exit 1
+}
 
 # ============================================================================
 # Version Tracking and Smart Download Logic
@@ -626,12 +726,7 @@ check_version_and_download() {
 
     if [ "${need_download}" = "true" ]; then
         log "Verifying kernel module availability..."
-        if ! curl --silent --location --head --fail --connect-timeout 10 --max-time 30 "${MODULE_URL}" > /dev/null 2>&1; then
-            echo "Kernel module not found for TrueNAS version ${TRUENAS_VERSION}."
-            echo "Expected location: ${MODULE_URL}"
-            echo "Please build the kernel module manually."
-            exit 1
-        fi
+        resolve_module_url "${TRUENAS_VERSION}" "${TRUENAS_NAME}"
         return 0  # Need to download
     else
         return 1  # Skip download
@@ -749,6 +844,7 @@ install_kernel_module() {
 
     if [ "${NEED_MODULE_DOWNLOAD}" = "true" ]; then
         log "Downloading kernel module to persistent directory..."
+        log "Module URL: ${MODULE_URL}"
         if [ "${DRY_RUN}" = "true" ]; then
             log "DRY RUN: would download module to ${module_dest}"
         else
