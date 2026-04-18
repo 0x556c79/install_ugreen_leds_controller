@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.9] - 2026-04-18
+
+### Added
+
+#### Kernel Module Version Fallback ([#15](https://github.com/0x556c79/install_ugreen_leds_controller/pull/15))
+
+- When the pre-built `led-ugreen.ko` for the running TrueNAS SCALE version is
+  not available on GitHub, the installer now automatically tries earlier patch
+  versions within the same `YY.MM` release train (e.g. `25.04.1` → `25.04.0`)
+  before failing.
+- A clear warning block is logged when a fallback version is used, showing both
+  the requested version and the version actually downloaded.
+- The `.version` file continues to store the **running** TrueNAS version (not
+  the fallback), so skip-download logic on the next boot remains correct.
+
+### Fixed
+
+#### Octal Arithmetic in Patch Version Calculation ([#16](https://github.com/0x556c79/install_ugreen_leds_controller/pull/16))
+
+- Patch version strings like `08` or `09` were treated as invalid octal by
+  bash arithmetic expansion, causing the fallback loop to error. Fixed by using
+  `$(( 10#$patch ))` to force decimal base.
+
+---
+
 ## [2.0.8] - 2026-04-01
 
 ### Fixed
