@@ -24,8 +24,28 @@ This installer has been confirmed working on the following models. For general m
 | UGREEN DXP4800 | Tested with TrueNAS SCALE 25.04.2.5, script v1.0 | [#6](https://github.com/0x556c79/install_ugreen_leds_controller/issues/6) |
 | UGREEN DXP6800 Pro | Tested with TrueNAS SCALE 25.10.3 | [#17](https://github.com/0x556c79/install_ugreen_leds_controller/issues/17) |
 | UGREEN DXP8800 Plus | Developed & tested on this model | — |
+| UGREEN NASync iDX6011 Pro | Experimental support; different LED protocol, interim TrueNAS modules built from the iDX fork | [#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23) |
 
 If you've confirmed the script works on another model, feel free to open an issue or pull request!
+
+### iDX6011/iDX6012 Controller Source
+
+The iDX6011/iDX6012 series uses a different LED protocol than the DX/DXP models. The installer defaults to `--controller-source auto`, which checks the DMI product name and selects the iDX profile only for `iDX6011` or `iDX6012`.
+
+```bash
+sudo bash install_ugreen_leds_controller.sh --controller-source auto
+sudo bash install_ugreen_leds_controller.sh --controller-source idx6011  # force iDX profile
+sudo bash install_ugreen_leds_controller.sh --controller-source upstream # force DX/DXP upstream profile
+```
+
+Until iDX support is merged upstream, the iDX profile expects TrueNAS kernel modules built from `klein0r/ugreen_leds_controller` and published on the temporary `idx6011-kmods` artifact branch in this repository. The `build-idx6011-truenas-kmods` GitHub Actions workflow builds missing artifacts for the supported TrueNAS SCALE trains (24.04, 24.10, 25.04, and 25.10) from pinned source commit `480f114bae69ec2bb7003df5d9c13f788ca6ace6`. When upstream publishes compatible artifacts, only the profile constants in the installer should need to change.
+
+For iDX network LEDs, the installed monitor auto-detects `network_stat` and `network_stat2`. Optional overrides can be set in `/etc/ugreen-leds.conf`:
+
+```bash
+NETDEV_LED_NAMES="network_stat network_stat2"
+NETDEV_INTERFACE_NAMES="enp1s0 enp2s0"
+```
 
 ## TrueNAS Scale Read-Only Filesystem Support
 
@@ -170,6 +190,8 @@ Options:
   --persist-dir <path>  Specify custom persistent storage directory
   --use-current-dir     Use current working directory for leds_controller/ folder
   --pool-path <path>    Specify ZFS pool path under /mnt/
+  --controller-source <auto|upstream|idx6011>
+                        Select controller source profile (default: auto)
 
   --uninstall           Fully uninstall: stop services, unload modules, remove files
   --dry-run             Show actions without making changes

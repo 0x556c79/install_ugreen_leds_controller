@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+#### iDX6011/iDX6012 Controller Source Support ([#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23))
+
+- Added `--controller-source <auto|upstream|idx6011>`. The default `auto`
+  profile detects `iDX6011`/`iDX6012` from DMI and otherwise keeps the existing
+  upstream DX/DXP behavior.
+- Added separate artifact and script source profiles so the temporary iDX
+  implementation can use TrueNAS modules built from
+  `klein0r/ugreen_leds_controller` while upstream support remains pending.
+- Added TrueNAS module build tooling under `build-scripts/truenas/`, pinned to
+  `klein0r/ugreen_leds_controller@480f114bae69ec2bb7003df5d9c13f788ca6ace6`,
+  to avoid accidentally building the non-iDX upstream module.
+- Added `build-idx6011-truenas-kmods` GitHub Actions workflow to build missing
+  supported TrueNAS SCALE artifacts and publish them to the temporary
+  `idx6011-kmods` branch.
+- Added `.module-source` tracking alongside `.version`, preventing a cached
+  module from one controller profile from being reused by another.
+- Installed network monitor scripts now support iDX LED names
+  `network_stat` and `network_stat2`, with optional `NETDEV_LED_NAMES` and
+  `NETDEV_INTERFACE_NAMES` overrides.
+- Disk monitoring now limits iDX6011/iDX6012 systems to `disk1` through
+  `disk6`, avoiding `disk7`/`disk8` sysfs errors on six-bay iDX hardware.
+
+---
+
 ## [2.0.9] - 2026-04-18
 
 ### Added

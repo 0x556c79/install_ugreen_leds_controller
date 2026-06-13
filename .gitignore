@@ -2,44 +2,11 @@
 # AI Coding Agents & LLM Frameworks
 # ========================================
 
-# Aider (highly recommended by the Aider team)
-.aider*
-!.aiderignore
-!.aider.conf.yml
-
-# Cursor (AI code editor)
-.cursor/
-.cursorcache/
-.cursorignore
-
-# Continue.dev
-.continue/
-.continueignore
-
-# Claude / Anthropic projects
 .claude/
+.agent/
 .claudeignore
 CLAUDE.md
-
-# Other popular coding agents
-.roocode/
-.windsurf/
-.codeium/
-.cline/
-.devin/
-.open-devin/
-.agent/
-
-# CrewAI / LangChain / AutoGen specific
-.crewai/
-.crewai/memory/
-chroma.sqlite3
-chromadb-*.lock
-langchain.db
-vectorstore/
-chroma/
-faiss_index/
-*.lancedb
+AGENTS.md
 
 # Agent-generated workspaces, memory, and outputs
 workspace/
@@ -58,8 +25,7 @@ agent_state/
 conversations/
 chat_history*
 *.agent.log
-aider.log
-cursor.log
+mempalace.yaml
 
 # LLM caches
 .llm_cache/
@@ -165,3 +131,4 @@ temp/
 *.swp
 *.swo
 *~
+entities.json

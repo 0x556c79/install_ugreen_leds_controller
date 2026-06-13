@@ -1,0 +1,99 @@
+name: Build iDX6011 TrueNAS kernel modules
+
+on:
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: "Optional space-separated TrueNAS paths, e.g. TrueNAS-SCALE-Fangtooth/25.04.0"
+        required: false
+        type: string
+  schedule:
+    - cron: "17 3 * * 0"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: idx6011-kmods
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and publish iDX6011 modules
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Restore existing artifact branch build tree
+        run: |
+          set -euo pipefail
+          git fetch origin idx6011-kmods || true
+
+          if git show-ref --verify --quiet refs/remotes/origin/idx6011-kmods; then
+            git worktree add _idx6011-kmods origin/idx6011-kmods
+            if [[ -d _idx6011-kmods/build-scripts/truenas/build ]]; then
+              mkdir -p build-scripts/truenas
+              cp -a _idx6011-kmods/build-scripts/truenas/build build-scripts/truenas/
+            fi
+          fi
+
+          mkdir -p build-scripts/truenas/build
+
+      - name: Build missing supported TrueNAS modules
+        env:
+          REQUESTED_VERSIONS: ${{ github.event_name == 'workflow_dispatch' && inputs.versions || '' }}
+        run: |
+          set -euo pipefail
+          cd build-scripts/truenas
+
+          if [[ -n "${REQUESTED_VERSIONS}" ]]; then
+            # Intentionally allow space-separated manual input to become argv.
+            # shellcheck disable=SC2086
+            bash build-all.sh ${REQUESTED_VERSIONS}
+          else
+            bash build-all.sh
+          fi
+
+      - name: Publish artifact branch
+        run: |
+          set -euo pipefail
+
+          if [[ -e _idx6011-kmods/.git ]]; then
+            git -C _idx6011-kmods switch -C idx6011-kmods
+          else
+            git worktree add --detach _idx6011-kmods
+            git -C _idx6011-kmods switch --orphan idx6011-kmods
+          fi
+
+          git -C _idx6011-kmods rm -rf . || true
+          rm -rf _idx6011-kmods/build-scripts/truenas/build
+          mkdir -p _idx6011-kmods/build-scripts/truenas/build
+
+          while IFS= read -r -d '' file; do
+            dest="_idx6011-kmods/${file}"
+            mkdir -p "$(dirname "${dest}")"
+            cp "${file}" "${dest}"
+          done < <(
+            find build-scripts/truenas/build -type f \
+              \( -name 'led-ugreen.ko' -o -name 'headers-missing.txt' -o -name 'idx6011-source.env' \) \
+              -print0
+          )
+
+          git -C _idx6011-kmods add -f build-scripts/truenas/build
+
+          if git -C _idx6011-kmods diff --cached --quiet; then
+            echo "No artifact changes to publish"
+            exit 0
+          fi
+
+          git -C _idx6011-kmods commit -m "Build iDX6011 TrueNAS kernel modules"
+          git -C _idx6011-kmods push origin HEAD:idx6011-kmods
