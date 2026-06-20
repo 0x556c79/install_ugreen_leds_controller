@@ -23,6 +23,7 @@ This installer has been confirmed working on the following models. For general m
 | UGREEN DXP3800 Plus | Tested with TrueNAS SCALE 25.10.3 | [#18](https://github.com/0x556c79/install_ugreen_leds_controller/issues/18) |
 | UGREEN DXP4700 | Tested with TrueNAS SCALE 25.10.4 | — |
 | UGREEN DXP4800 | Tested with TrueNAS SCALE 25.04.2.5, script v1.0 | [#6](https://github.com/0x556c79/install_ugreen_leds_controller/issues/6) |
+| UGREEN NASync DXP4800 Pro | Customization configuration also tested | [#24](https://github.com/0x556c79/install_ugreen_leds_controller/issues/24) |
 | UGREEN DXP6800 Pro | Tested with TrueNAS SCALE 25.10.3 | [#17](https://github.com/0x556c79/install_ugreen_leds_controller/issues/17) |
 | UGREEN DXP8800 Plus | Developed & tested on this model | — |
 | UGREEN NASync iDX6011 Pro | Experimental support; different LED protocol, interim TrueNAS modules built from the iDX fork | [#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23) |
