@@ -1,12 +1,9 @@
 # ========================================
 # AI Coding Agents & LLM Frameworks
 # ========================================
-
+.agents/
+.codex/
 .claude/
-.agent/
-.claudeignore
-CLAUDE.md
-AGENTS.md
 
 # Agent-generated workspaces, memory, and outputs
 workspace/
