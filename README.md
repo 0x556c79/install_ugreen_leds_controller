@@ -17,9 +17,9 @@ curl -sf https://raw.githubusercontent.com/0x556c79/install_ugreen_leds_controll
 > [!NOTE]
 > This checklist combines the [upstream project's compatibility status](https://github.com/miskcoo/ugreen_leds_controller) with TrueNAS SCALE reports from this installer repository.
 >
-> - `[x]` means upstream lists the model as tested and working.
-> - `[ ]` means upstream has not confirmed the model as tested and working. It does not necessarily mean the model is incompatible; installer-only reports are identified explicitly.
->
+> - [x] **means upstream lists the model as tested and working.**
+> - [ ] **means upstream has not confirmed the model as tested and working. It does not necessarily mean the model is incompatible; installer-only reports are identified explicitly.**
+> ---
 > - [x] UGREEN DX4600 Pro
 > - [ ] UGREEN DX4600+ — Reported working with TrueNAS SCALE 25.04.2.6 in [this repository's #20](https://github.com/0x556c79/install_ugreen_leds_controller/issues/20).
 > - [x] UGREEN DX4700+
