@@ -30,31 +30,68 @@ curl -sf https://raw.githubusercontent.com/0x556c79/install_ugreen_leds_controll
 > - [x] UGREEN DXP4800 ([upstream #41](https://github.com/miskcoo/ugreen_leds_controller/issues/41); [installer report #6](https://github.com/0x556c79/install_ugreen_leds_controller/issues/6))
 > - [x] UGREEN DXP4800 Plus ([upstream Gist](https://gist.github.com/Kerryliu/c380bb6b3b69be5671105fc23e19b7e8))
 > - [ ] UGREEN DXP4800 Pro — Reported working only in [this repository's #24](https://github.com/0x556c79/install_ugreen_leds_controller/issues/24), but not tested or confirmed upstream; [#27](https://github.com/0x556c79/install_ugreen_leds_controller/issues/27) reports it not working on TrueNAS SCALE 25.10.4.
-> - [ ] UGREEN DXP4800 GT (**Experimental**, available upstream in [v0.4-beta](https://github.com/miskcoo/ugreen_leds_controller/releases/tag/v0.4-beta), [upstream PR #100](https://github.com/miskcoo/ugreen_leds_controller/pull/100))
+> - [ ] UGREEN DXP4800 GT (**Experimental upstream only**, available in [v0.4-beta](https://github.com/miskcoo/ugreen_leds_controller/releases/tag/v0.4-beta), [upstream PR #100](https://github.com/miskcoo/ugreen_leds_controller/pull/100)). This installer has no dedicated or automatically selected DXP4800 GT profile yet.
 > - [x] UGREEN DXP6800 Pro ([upstream #7](https://github.com/miskcoo/ugreen_leds_controller/issues/7); [installer report #17](https://github.com/0x556c79/install_ugreen_leds_controller/issues/17))
 > - [x] UGREEN DXP8800 Plus ([upstream #1](https://github.com/miskcoo/ugreen_leds_controller/issues/1), [supporting repository](https://github.com/meyergru/ugreen_dxp8800_leds_controller)); developed and tested with this installer on this model.
 > - [ ] UGREEN DXP480T Plus ([upstream #6 comment](https://github.com/miskcoo/ugreen_leds_controller/issues/6#issuecomment-2156807225))
-> - [ ] UGREEN iDX6011 (Pro) (**Experimental**, available upstream in [v0.4-beta](https://github.com/miskcoo/ugreen_leds_controller/releases/tag/v0.4-beta), [upstream #93](https://github.com/miskcoo/ugreen_leds_controller/issues/93), [upstream PR #104](https://github.com/miskcoo/ugreen_leds_controller/pull/104); this installer's separate experimental fork support is tracked in [#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23))
+> - [ ] UGREEN iDX6011 Pro (**Experimental candidate**, automatically selects upstream [v0.4-beta](https://github.com/miskcoo/ugreen_leds_controller/releases/tag/v0.4-beta); hardware validation is still required in [#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23)).
+> - [ ] UGREEN iDX6011 / iDX6012 (**Manual experimental only** via `--controller-source idx6011`; not automatically selected or confirmed by this installer).
 
 If upstream confirms another model as working and you have tested this installer on it, feel free to open an issue or pull request here!
 
-### iDX6011/iDX6012 Controller Source
+### iDX6011 Pro upstream beta source
 
-The iDX6011/iDX6012 series uses a different LED protocol than the DX/DXP models. The installer defaults to `--controller-source auto`, which checks the DMI product name and selects the iDX profile only for `iDX6011` or `iDX6012`.
+The iDX6011 family uses a different LED protocol from the stable DX/DXP implementation. This candidate replaces the former third-party source with official upstream `v0.4-beta`, pinned to commit `c830a2293cf5c67c58e5a98ca339b089b2b13fc3`.
+
+The default `--controller-source auto` selects this beta only when the exact DMI product name is `iDX6011 Pro`. Every other model remains on stable upstream `master`. The related `iDX6011` and `iDX6012` names are manual experimental overrides until they have separate hardware reports.
 
 ```bash
-sudo bash install_ugreen_leds_controller.sh --controller-source auto
-sudo bash install_ugreen_leds_controller.sh --controller-source idx6011  # force iDX profile
-sudo bash install_ugreen_leds_controller.sh --controller-source upstream # force DX/DXP upstream profile
+sudo bash install_ugreen_leds_controller.sh --controller-source auto      # exact Pro selects beta
+sudo bash install_ugreen_leds_controller.sh --controller-source idx6011   # force upstream v0.4-beta
+sudo bash install_ugreen_leds_controller.sh --controller-source upstream  # force stable master
 ```
 
-Until iDX support is merged upstream, the iDX profile expects TrueNAS kernel modules built from `klein0r/ugreen_leds_controller` and published on the temporary `idx6011-kmods` artifact branch in this repository. The `build-idx6011-truenas-kmods` GitHub Actions workflow builds missing artifacts for the supported TrueNAS SCALE trains (24.04, 24.10, 25.04, and 25.10) from pinned source commit `480f114bae69ec2bb7003df5d9c13f788ca6ace6`. When upstream publishes compatible artifacts, only the profile constants in the installer should need to change.
+The beta module comes from upstream's tagged [`gh-actions` artifact tree](https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/tags/v0.4-beta). That tree currently has exact-version artifacts for the 25.04 and 25.10 trains through 25.10.5; it does not contain 24.04 or 24.10 artifacts. The installer requires an exact `/etc/version` match for this profile and never falls back to an older beta module or to the former third-party branch.
 
-For iDX network LEDs, the installed monitor auto-detects `network_stat` and `network_stat2`. Optional overrides can be set in `/etc/ugreen-leds.conf`:
+For the exact Pro layout, the expected sysfs LEDs are `power`, `netdev`, `netdev2`, and `disk1` through `disk6`. The monitor assigns detected physical NICs to `netdev` and `netdev2` in sorted order. Optional overrides can be set in `/etc/ugreen-leds.conf`:
 
 ```bash
-NETDEV_LED_NAMES="network_stat network_stat2"
+NETDEV_LED_NAMES="netdev netdev2"
 NETDEV_INTERFACE_NAMES="enp1s0 enp2s0"
+```
+
+An existing exact override of `network_stat network_stat2` is translated at runtime when the new `netdev` paths exist. Other custom LED-name configurations are left unchanged.
+
+For a manual `iDX6011` or `iDX6012` test, keep `--controller-source idx6011` in the TrueNAS Init Script command on every boot. Exact `iDX6011 Pro` systems can use the default `auto` selection.
+
+> [!WARNING]
+> Upstream PR #104 was not tested on iDX6011 Pro hardware and its initialization differs from the previously working fork. Keep the fallback available and do not merge this candidate until the probe, both LAN LEDs, all six disk LEDs, and reboot persistence pass on real hardware. The pre-migration installer at commit `b3ce00f` remains the rollback path.
+
+#### iDX6011 Pro hardware test gate
+
+Before installing, record the exact host and bus information and confirm that both the tagged beta artifact and rollback artifact are available:
+
+```bash
+cat /etc/version
+uname -r
+cat /sys/class/dmi/id/product_name
+i2cdetect -l
+```
+
+Test the candidate first with the explicit beta profile:
+
+```bash
+curl -sf https://raw.githubusercontent.com/0x556c79/install_ugreen_leds_controller/migrate-idx6011-upstream-beta/install_ugreen_leds_controller.sh -o install_ugreen_leds_controller.sh
+sudo bash install_ugreen_leds_controller.sh --controller-source idx6011
+```
+
+Acceptance requires module parameters `smbus-block`, `2`, and `6`; LEDs `power`, `netdev`, `netdev2`, and `disk1`–`disk6`; a stopped rolling boot animation; independent activity on both LAN LEDs; no disk7/disk8, I²C, or status errors; healthy probe/disk/network services; and a successful reboot using the same cached tagged module. After the explicit-profile run passes, rerun with `--controller-source auto` and confirm the same source marker is reused without downloading again.
+
+If any check fails, reinstall the known-working third-party profile with the pre-migration installer and report the captured service/kernel evidence upstream:
+
+```bash
+curl -sf https://raw.githubusercontent.com/0x556c79/install_ugreen_leds_controller/b3ce00f/install_ugreen_leds_controller.sh -o install_ugreen_leds_controller.sh
+sudo bash install_ugreen_leds_controller.sh --controller-source idx6011
 ```
 
 ## TrueNAS Scale Read-Only Filesystem Support
@@ -166,14 +203,16 @@ The installer creates the following structure:
 
 ```
 /mnt/<POOL>/<PATH>/leds_controller/
+├── .installer-source                           # Tagged helper-script source marker
+├── .module-source                              # Kernel-module source marker
 ├── .version                                    # TrueNAS version tracker
 ├── led-ugreen.ko                               # Kernel module
 ├── install_ugreen_leds_controller.sh          # Installer copy for reuse
-├── ugreen_leds_controller/                    # Cloned repository
-│   └── scripts/
+├── ugreen-leds.conf                            # Persistent configuration
 └── scripts/                                    # Installed scripts
     ├── ugreen-diskiomon
     ├── ugreen-netdevmon
+    ├── ugreen-netdevmon-multi
     ├── ugreen-probe-leds
     └── ugreen-power-led
 
@@ -202,6 +241,9 @@ Options:
   --pool-path <path>    Specify ZFS pool path under /mnt/
   --controller-source <auto|upstream|idx6011>
                         Select controller source profile (default: auto)
+                        auto: beta only for exact iDX6011 Pro DMI
+                        upstream: force stable upstream master
+                        idx6011: force experimental upstream v0.4-beta
 
   --uninstall           Fully uninstall: stop services, unload modules, remove files
   --dry-run             Show actions without making changes
@@ -244,7 +286,8 @@ The uninstaller reverses all installation steps: stops services, removes service
 
 ```bash
 systemctl status ugreen-diskiomon.service
-systemctl status ugreen-netdevmon@<interface>.service
+systemctl status ugreen-probe-leds.service
+systemctl status ugreen-netdevmon-multi.service
 ```
 
 **View installer logs:**
@@ -252,12 +295,14 @@ systemctl status ugreen-netdevmon@<interface>.service
 ```bash
 ls -lh /mnt/<POOL>/<PATH>/leds_controller/
 cat /mnt/<POOL>/<PATH>/leds_controller/.version
+cat /mnt/<POOL>/<PATH>/leds_controller/.module-source
+cat /mnt/<POOL>/<PATH>/leds_controller/.installer-source
 ```
 
 **Force module re-download:**
 
 ```bash
-rm /mnt/<POOL>/<PATH>/leds_controller/.version
+rm /mnt/<POOL>/<PATH>/leds_controller/.module-source
 /mnt/<POOL>/<PATH>/leds_controller/install_ugreen_leds_controller.sh --yes
 ```
 
@@ -265,6 +310,9 @@ rm /mnt/<POOL>/<PATH>/leds_controller/.version
 
 ```bash
 lsmod | grep led_ugreen
+cat /sys/module/led_ugreen/parameters/write_protocol
+cat /sys/module/led_ugreen/parameters/num_netdev_leds
+cat /sys/module/led_ugreen/parameters/num_disk_leds
 ```
 
 **Check persistent directory paths in services:**

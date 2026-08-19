@@ -4,29 +4,43 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Added
+### Changed
 
-#### iDX6011/iDX6012 Controller Source Support ([#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23))
+#### Hardware-gated upstream iDX6011 Pro beta migration ([#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23))
 
-- Added `--controller-source <auto|upstream|idx6011>`. The default `auto`
-  profile detects `iDX6011`/`iDX6012` from DMI and otherwise keeps the existing
-  upstream DX/DXP behavior.
-- Added separate artifact and script source profiles so the temporary iDX
-  implementation can use TrueNAS modules built from
-  `klein0r/ugreen_leds_controller` while upstream support remains pending.
-- Added TrueNAS module build tooling under `build-scripts/truenas/`, pinned to
-  `klein0r/ugreen_leds_controller@480f114bae69ec2bb7003df5d9c13f788ca6ace6`,
-  to avoid accidentally building the non-iDX upstream module.
-- Added `build-idx6011-truenas-kmods` GitHub Actions workflow to build missing
-  supported TrueNAS SCALE artifacts and publish them to the temporary
-  `idx6011-kmods` branch.
-- Added `.module-source` tracking alongside `.version`, preventing a cached
-  module from one controller profile from being reused by another.
-- Installed network monitor scripts now support iDX LED names
-  `network_stat` and `network_stat2`, with optional `NETDEV_LED_NAMES` and
-  `NETDEV_INTERFACE_NAMES` overrides.
-- Disk monitoring now limits iDX6011/iDX6012 systems to `disk1` through
-  `disk6`, avoiding `disk7`/`disk8` sysfs errors on six-bay iDX hardware.
+- Repointed the `idx6011` controller profile from the temporary third-party
+  implementation to official upstream `v0.4-beta`, pinned to commit
+  `c830a2293cf5c67c58e5a98ca339b089b2b13fc3` and its tagged `gh-actions`
+  artifact tree.
+- Preserved `--controller-source <auto|upstream|idx6011>` while narrowing
+  automatic beta selection to the exact `iDX6011 Pro` DMI product name.
+  Related `iDX6011` and `iDX6012` variants remain manual experimental paths;
+  all other models keep stable upstream `master` behavior.
+- The beta profile now requires an exact TrueNAS-version artifact. Its tagged
+  tree covers the 25.04 and 25.10 trains through 25.10.5, but not 24.04 or
+  24.10; it never uses stable, older-version, or third-party fallbacks.
+- Source markers now record the upstream tag, commit, and artifact path so an
+  existing third-party cache refreshes once and subsequent boots can reuse the
+  verified beta artifact.
+- Beta downloads are staged in a temporary file, checked with `modinfo` for
+  kernel compatibility and required parameters, then atomically installed.
+- The upstream probe now owns beta module loading with its generated
+  `write_protocol`, network-LED, and disk-LED arguments. The TrueNAS `insmod`
+  fallback preserves those arguments and reads DMI from sysfs before using
+  `dmidecode`.
+- The probe service must complete successfully before disk and network
+  monitors start. Source migrations stop dependent services and unload the
+  previous module before applying the new profile.
+- Updated the dual-network monitor for upstream `netdev`/`netdev2` names,
+  deterministic NIC ordering, and removal of the unsupported `invert` write.
+  The exact legacy override `network_stat network_stat2` is translated without
+  rewriting unrelated custom configuration.
+- Removed the fork-specific six-disk script rewrite. The beta module exposes
+  `disk1` through `disk6`, and upstream's monitor ignores absent LEDs.
+
+The third-party build workflow and source tree remain available only as a
+hardware-test rollback. They must not be removed or merged away until the
+candidate passes iDX6011 Pro hardware and reboot acceptance.
 
 ---
 

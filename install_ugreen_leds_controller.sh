@@ -36,7 +36,10 @@ help() {
     echo "  --use-current-dir     Use current working directory for leds_controller/ folder"
     echo "  --pool-path <path>    Specify ZFS pool path under /mnt/ for persistent storage"
     echo "  --controller-source <auto|upstream|idx6011>"
-    echo "                        Select controller source profile (default: auto)"
+    echo "                        Select controller profile (default: auto)"
+    echo "                        auto: stable upstream, except exact iDX6011 Pro DMI"
+    echo "                        upstream: force stable upstream master"
+    echo "                        idx6011: force experimental upstream v0.4-beta"
     echo
     echo "  --uninstall           Fully uninstall: stop services, unload modules, remove files"
     echo "  --dry-run             Show actions without making changes"
@@ -56,7 +59,7 @@ help() {
     echo "  # Non-interactive (for TrueNAS Init Scripts)"
     echo "  sudo bash install_ugreen_leds_controller.sh --yes"
     echo
-    echo "  # Force iDX6011/iDX6012 controller support"
+    echo "  # Force the experimental upstream iDX profile"
     echo "  sudo bash install_ugreen_leds_controller.sh --controller-source idx6011"
     echo
     echo "  # Uninstall (preview with --dry-run first)"
@@ -76,12 +79,14 @@ API_URL=""
 SCRIPT_REPO_URL=""
 SCRIPT_REPO_BRANCH=""
 SCRIPT_REPO_REF=""
+SCRIPT_EXPECTED_COMMIT=""
 SCRIPT_SOURCE_MARKER=""
 CONTROLLER_PROFILE=""
 CONTROLLER_MODULE_SOURCE=""
 SYSTEM_PRODUCT_NAME=""
 
-IDX_SCRIPT_REPO_REF="480f114bae69ec2bb7003df5d9c13f788ca6ace6"
+readonly IDX_UPSTREAM_TAG="v0.4-beta"
+readonly IDX_UPSTREAM_COMMIT="c830a2293cf5c67c58e5a98ca339b089b2b13fc3"
 
 # Fetch available TrueNAS builds from GitHub (deferred until after arg parsing)
 KMOD_DIRS=""
@@ -216,21 +221,28 @@ read_system_product_name() {
     echo "$product"
 }
 
-is_idx6011_product() {
+is_idx6011_pro_product() {
+    local product="$1"
+
+    [ "$product" = "iDX6011 Pro" ]
+}
+
+is_upstream_beta_smbus_product() {
     local product="$1"
 
     case "$product" in
-        *iDX6011*|*iDX6012*) return 0 ;;
+        "DXP4800 GT"|"iDX6011"|"iDX6011 Pro"|"iDX6012") return 0 ;;
         *) return 1 ;;
     esac
 }
 
 select_controller_profile() {
     SYSTEM_PRODUCT_NAME=$(read_system_product_name)
+    SCRIPT_EXPECTED_COMMIT=""
 
     case "${CONTROLLER_SOURCE}" in
         auto)
-            if is_idx6011_product "${SYSTEM_PRODUCT_NAME}"; then
+            if is_idx6011_pro_product "${SYSTEM_PRODUCT_NAME}"; then
                 CONTROLLER_PROFILE="idx6011"
             else
                 CONTROLLER_PROFILE="upstream"
@@ -258,26 +270,35 @@ select_controller_profile() {
             CONTROLLER_MODULE_SOURCE="upstream:miskcoo/ugreen_leds_controller:gh-actions"
             ;;
         idx6011)
-            REPO_OWNER="0x556c79"
-            REPO_NAME="install_ugreen_leds_controller"
-            REPO_BRANCH="idx6011-kmods"
-            BUILD_PATH="build-scripts/truenas/build"
-            SCRIPT_REPO_URL="https://github.com/klein0r/ugreen_leds_controller.git"
-            SCRIPT_REPO_BRANCH="master"
-            SCRIPT_REPO_REF="${IDX_SCRIPT_REPO_REF}"
-            CONTROLLER_MODULE_SOURCE="idx6011:klein0r/ugreen_leds_controller@${IDX_SCRIPT_REPO_REF}:0x556c79/install_ugreen_leds_controller:idx6011-kmods"
+            REPO_OWNER="miskcoo"
+            REPO_NAME="ugreen_leds_controller"
+            REPO_BRANCH="gh-actions"
+            BUILD_PATH="build-scripts/truenas/build/tags/${IDX_UPSTREAM_TAG}"
+            SCRIPT_REPO_URL="https://github.com/miskcoo/ugreen_leds_controller.git"
+            SCRIPT_REPO_BRANCH="${IDX_UPSTREAM_TAG}"
+            SCRIPT_REPO_REF="${IDX_UPSTREAM_COMMIT}"
+            SCRIPT_EXPECTED_COMMIT="${IDX_UPSTREAM_COMMIT}"
+            CONTROLLER_MODULE_SOURCE="idx6011:miskcoo/ugreen_leds_controller@${IDX_UPSTREAM_TAG}:${IDX_UPSTREAM_COMMIT}:gh-actions:${BUILD_PATH}"
             ;;
     esac
 
     REPO_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/refs/heads/${REPO_BRANCH}/${BUILD_PATH}"
     API_URL="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${BUILD_PATH}?ref=${REPO_BRANCH}"
-    SCRIPT_SOURCE_MARKER="${CONTROLLER_PROFILE}:${SCRIPT_REPO_URL}:${SCRIPT_REPO_REF}"
+    SCRIPT_SOURCE_MARKER="${CONTROLLER_PROFILE}:${SCRIPT_REPO_URL}:${SCRIPT_REPO_BRANCH}:${SCRIPT_REPO_REF}:${BUILD_PATH}"
 
-    log "Controller source profile: ${CONTROLLER_PROFILE}"
+    if [ "${CONTROLLER_PROFILE}" = "idx6011" ]; then
+        log "Controller source profile: idx6011 (miskcoo/ugreen_leds_controller ${IDX_UPSTREAM_TAG})"
+    else
+        log "Controller source profile: upstream (miskcoo/ugreen_leds_controller master)"
+    fi
     if [ -n "${SYSTEM_PRODUCT_NAME}" ]; then
         log "Detected system product: ${SYSTEM_PRODUCT_NAME}"
     else
         log "System product could not be detected; using profile: ${CONTROLLER_PROFILE}"
+    fi
+
+    if [ "${CONTROLLER_SOURCE}" = "idx6011" ] && ! is_idx6011_pro_product "${SYSTEM_PRODUCT_NAME}"; then
+        log "WARNING: idx6011 is an experimental manual override for this DMI product; only iDX6011 Pro receives the upstream 2-LAN/6-disk layout automatically"
     fi
 }
 
@@ -445,7 +466,7 @@ uninstall_all() {
     # --- Step 1: Stop and disable systemd services ---
     log "Stopping and disabling systemd services..."
 
-    local services_to_stop=("ugreen-diskiomon.service" "ugreen-power-led.service" "ugreen-netdevmon-multi.service")
+    local services_to_stop=("ugreen-diskiomon.service" "ugreen-power-led.service" "ugreen-netdevmon-multi.service" "ugreen-probe-leds.service")
 
     # Find any leftover ugreen-netdevmon@*.service instances
     for svc in /etc/systemd/system/multi-user.target.wants/ugreen-netdevmon@*.service; do
@@ -472,7 +493,7 @@ uninstall_all() {
 
     # --- Step 2: Remove systemd service files ---
     log "Removing systemd service files..."
-    local service_files=("ugreen-diskiomon.service" "ugreen-netdevmon-multi.service" "ugreen-netdevmon@.service" "ugreen-power-led.service")
+    local service_files=("ugreen-diskiomon.service" "ugreen-netdevmon-multi.service" "ugreen-netdevmon@.service" "ugreen-power-led.service" "ugreen-probe-leds.service")
     for svc_file in "${service_files[@]}"; do
         local svc_path="/etc/systemd/system/${svc_file}"
         if [ -f "${svc_path}" ]; then
@@ -749,6 +770,30 @@ resolve_module_url() {
     version_major=$(echo "$running_version" | cut -d. -f1,2)
     version_patch_str=$(echo "$running_version" | cut -d. -f3)
 
+    if [ "${CONTROLLER_PROFILE}" = "idx6011" ]; then
+        candidate_url="${REPO_URL}/${codename}/${running_version}/led-ugreen.ko"
+        log "Probing exact experimental module: ${candidate_url}"
+
+        probe_result=0
+        probe_module_url "$candidate_url" || probe_result=$?
+        if [ "$probe_result" -eq 2 ]; then
+            log "Transient error for ${running_version}, retrying..."
+            probe_result=0
+            probe_module_url "$candidate_url" || probe_result=$?
+        fi
+
+        if [ "$probe_result" -eq 0 ]; then
+            MODULE_URL="$candidate_url"
+            return 0
+        fi
+
+        echo "Exact upstream ${IDX_UPSTREAM_TAG} kernel module not found for TrueNAS SCALE ${running_version}." >&2
+        echo "The experimental iDX6011 Pro profile does not use older-version or third-party fallbacks." >&2
+        echo "Tagged artifacts currently cover the 25.04 and 25.10 release trains:" >&2
+        echo "  https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/${BUILD_PATH}" >&2
+        exit 1
+    fi
+
     # Build ordered candidate list: exact running version, then descending patch variants
     local -a candidates
     candidates=("$running_version")
@@ -807,11 +852,6 @@ resolve_module_url() {
     # All candidates exhausted — preserve original error behaviour
     echo "Kernel module not found for TrueNAS SCALE ${running_version}."
     echo "No fallback module available within the ${version_major} release train."
-    if [ "${CONTROLLER_PROFILE}" = "idx6011" ]; then
-        echo "The iDX6011/iDX6012 profile expects temporary artifacts on:"
-        echo "  https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/${REPO_BRANCH}/${BUILD_PATH}"
-        echo "Build and publish led-ugreen.ko files from klein0r/ugreen_leds_controller@${IDX_SCRIPT_REPO_REF}."
-    fi
     echo "Please build the kernel module manually."
     exit 1
 }
@@ -949,9 +989,10 @@ log_separator
 log "Preparing repository..."
 
 clone_controller_repository() {
-    local clone_marker_file="${CLONE_DIR}/.installer-source"
+    local clone_marker_file="${PERSIST_DIR}/.installer-source"
     local stored_clone_source=""
     local needs_clone=false
+    local actual_commit=""
 
     if [ -f "${clone_marker_file}" ]; then
         stored_clone_source=$(cat "${clone_marker_file}" 2>/dev/null || echo "")
@@ -979,6 +1020,18 @@ clone_controller_repository() {
         if [ "${SCRIPT_REPO_REF}" != "${SCRIPT_REPO_BRANCH}" ]; then
             git -C "${CLONE_DIR}" checkout --detach "${SCRIPT_REPO_REF}" -q
         fi
+
+        if [ -n "${SCRIPT_EXPECTED_COMMIT}" ]; then
+            actual_commit=$(git -C "${CLONE_DIR}" rev-parse HEAD)
+            if [ "${actual_commit}" != "${SCRIPT_EXPECTED_COMMIT}" ]; then
+                echo "Controller script source verification failed." >&2
+                echo "Expected ${SCRIPT_EXPECTED_COMMIT}, got ${actual_commit}." >&2
+                rm -rf "${CLONE_DIR}"
+                exit 1
+            fi
+            log "Verified controller scripts at ${actual_commit}"
+        fi
+
         echo "${SCRIPT_SOURCE_MARKER}" > "${clone_marker_file}"
         log "Repository cloned successfully"
         CLONED_REPO=true
@@ -1007,7 +1060,8 @@ patch_config_template() {
     cat <<'EOL' >> "${config_path}"
 
 # Optional network LED override.
-# Leave empty to auto-detect: netdev on DX/DXP, network_stat/network_stat2 on iDX6011/iDX6012.
+# Leave empty to auto-detect: netdev on legacy models, netdev/netdev2 on iDX6011 Pro.
+# The legacy iDX names network_stat/network_stat2 are translated during migration.
 NETDEV_LED_NAMES=""
 
 # Optional network interface override. Leave empty to use detected physical interfaces.
@@ -1025,8 +1079,46 @@ patch_config_template
 log_separator
 log "Installing kernel module..."
 
+validate_downloaded_module() {
+    local module_file="$1"
+    local module_info
+    local module_kernel
+    local running_kernel
+    local required_parameter
+
+    if [ ! -s "${module_file}" ]; then
+        echo "Downloaded kernel module is empty." >&2
+        return 1
+    fi
+
+    if ! module_info=$(modinfo "${module_file}" 2>&1); then
+        echo "Downloaded file is not a valid kernel module:" >&2
+        echo "${module_info}" >&2
+        return 1
+    fi
+
+    if [ "${CONTROLLER_PROFILE}" = "idx6011" ]; then
+        for required_parameter in write_protocol num_netdev_leds num_disk_leds; do
+            if ! grep -Eq "^parm:[[:space:]]+${required_parameter}:" <<< "${module_info}"; then
+                echo "Downloaded module is missing required ${IDX_UPSTREAM_TAG} parameter: ${required_parameter}" >&2
+                return 1
+            fi
+        done
+
+        module_kernel=$(modinfo -F vermagic "${module_file}" 2>/dev/null | awk '{print $1}')
+        running_kernel=$(uname -r)
+        if [ "${module_kernel}" != "${running_kernel}" ]; then
+            echo "Downloaded module kernel mismatch: expected ${running_kernel}, got ${module_kernel}." >&2
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
 install_kernel_module() {
     local module_dest="${PERSIST_DIR}/led-ugreen.ko"
+    local module_download=""
     local kernel_ver
     kernel_ver=$(uname -r)
 
@@ -1034,14 +1126,26 @@ install_kernel_module() {
         log "Downloading kernel module to persistent directory..."
         log "Module URL: ${MODULE_URL}"
         if [ "${DRY_RUN}" = "true" ]; then
-            log "DRY RUN: would download module to ${module_dest}"
+            log "DRY RUN: would download, validate, and atomically install module at ${module_dest}"
         else
-            if ! curl -sSL --connect-timeout 10 --max-time 120 -o "${module_dest}" "${MODULE_URL}"; then
+            module_download=$(mktemp "${PERSIST_DIR}/.led-ugreen.ko.download.XXXXXX")
+            if ! curl --fail --silent --show-error --location \
+                --connect-timeout 10 --max-time 120 \
+                --output "${module_download}" "${MODULE_URL}"; then
+                rm -f "${module_download}"
                 echo "Kernel module download failed." >&2
                 exit 1
             fi
-            chmod 644 "${module_dest}"
-            log "Kernel module downloaded successfully"
+
+            if ! validate_downloaded_module "${module_download}"; then
+                rm -f "${module_download}"
+                echo "Kernel module validation failed; the existing cached module was left untouched." >&2
+                exit 1
+            fi
+
+            chmod 644 "${module_download}"
+            mv -f "${module_download}" "${module_dest}"
+            log "Kernel module downloaded and validated successfully"
 
             # Update version file
             echo "${TRUENAS_VERSION}" > "${PERSIST_DIR}/.version"
@@ -1080,17 +1184,77 @@ install_kernel_module
 # Module Loading Configuration
 # ============================================================================
 
+PREVIOUSLY_ACTIVE_LED_SERVICES=()
+
+stop_led_services_for_module_reload() {
+    local service
+    local services=(
+        ugreen-diskiomon.service
+        ugreen-netdevmon-multi.service
+        ugreen-power-led.service
+        ugreen-probe-leds.service
+    )
+
+    PREVIOUSLY_ACTIVE_LED_SERVICES=()
+    for service in "${services[@]}"; do
+        if systemctl is-active --quiet "${service}" 2>/dev/null; then
+            PREVIOUSLY_ACTIVE_LED_SERVICES+=("${service}")
+            log "Stopping ${service} before replacing the beta module"
+            systemctl stop "${service}"
+        fi
+    done
+}
+
+restore_previously_active_led_services() {
+    local service
+
+    for service in "${PREVIOUSLY_ACTIVE_LED_SERVICES[@]}"; do
+        systemctl start "${service}" 2>/dev/null || true
+    done
+}
+
+beta_module_parameters_match() {
+    local write_protocol=""
+    local num_netdev_leds=""
+    local num_disk_leds=""
+
+    if ! is_upstream_beta_smbus_product "${SYSTEM_PRODUCT_NAME}"; then
+        return 0
+    fi
+
+    if [ -r /sys/module/led_ugreen/parameters/write_protocol ]; then
+        write_protocol=$(cat /sys/module/led_ugreen/parameters/write_protocol 2>/dev/null || true)
+    fi
+    [ "${write_protocol}" = "smbus-block" ] || return 1
+
+    if is_idx6011_pro_product "${SYSTEM_PRODUCT_NAME}"; then
+        if [ -r /sys/module/led_ugreen/parameters/num_netdev_leds ]; then
+            num_netdev_leds=$(cat /sys/module/led_ugreen/parameters/num_netdev_leds 2>/dev/null || true)
+        fi
+        if [ -r /sys/module/led_ugreen/parameters/num_disk_leds ]; then
+            num_disk_leds=$(cat /sys/module/led_ugreen/parameters/num_disk_leds 2>/dev/null || true)
+        fi
+        [ "${num_netdev_leds}" = "2" ] && [ "${num_disk_leds}" = "6" ]
+    fi
+}
+
 log_separator
 log "Configuring kernel module loading..."
 if [ "${DRY_RUN}" = "true" ]; then
-    log "DRY RUN: would create /etc/modules-load.d/ugreen-led.conf"
+    if [ "${CONTROLLER_PROFILE}" = "idx6011" ]; then
+        log "DRY RUN: would configure dependency modules only; ugreen-probe-leds will load led-ugreen with ${IDX_UPSTREAM_TAG} parameters"
+    else
+        log "DRY RUN: would create /etc/modules-load.d/ugreen-led.conf with led-ugreen"
+    fi
 else
-    cat <<EOL > /etc/modules-load.d/ugreen-led.conf
-i2c-dev
-led-ugreen
-ledtrig-oneshot
-ledtrig-netdev
-EOL
+    {
+        echo "i2c-dev"
+        if [ "${CONTROLLER_PROFILE}" = "upstream" ]; then
+            echo "led-ugreen"
+        fi
+        echo "ledtrig-oneshot"
+        echo "ledtrig-netdev"
+    } > /etc/modules-load.d/ugreen-led.conf
     chmod 644 /etc/modules-load.d/ugreen-led.conf
 fi
 
@@ -1107,7 +1271,29 @@ else
         MODULE_LOADED=true
     fi
 
-    if [ "${MODULE_LOADED}" = "true" ] && [ "${NEED_MODULE_DOWNLOAD}" = "false" ]; then
+    if [ "${CONTROLLER_PROFILE}" = "idx6011" ]; then
+        BETA_MODULE_RELOAD_REQUIRED=false
+        if [ "${NEED_MODULE_DOWNLOAD}" = "true" ]; then
+            BETA_MODULE_RELOAD_REQUIRED=true
+        elif [ "${MODULE_LOADED}" = "true" ] && ! beta_module_parameters_match; then
+            log "Loaded beta module parameters do not match the detected model"
+            BETA_MODULE_RELOAD_REQUIRED=true
+        fi
+
+        if [ "${BETA_MODULE_RELOAD_REQUIRED}" = "true" ]; then
+            stop_led_services_for_module_reload
+            if [ "${MODULE_LOADED}" = "true" ]; then
+                log "Unloading the previous led-ugreen module before upstream probe configuration"
+                if ! rmmod led-ugreen; then
+                    echo "Unable to unload the existing led-ugreen module; restoring previously active services." >&2
+                    restore_previously_active_led_services
+                    exit 1
+                fi
+            fi
+        fi
+
+        log "Deferring led-ugreen loading to ugreen-probe-leds so model parameters are preserved"
+    elif [ "${MODULE_LOADED}" = "true" ] && [ "${NEED_MODULE_DOWNLOAD}" = "false" ]; then
         # Module already loaded and no new version downloaded — nothing to do
         log "Module led-ugreen already loaded and up to date, skipping"
     elif [ -f "${PERSIST_DIR}/led-ugreen.ko" ]; then
@@ -1271,13 +1457,27 @@ patch_probe_leds_script() {
     # Replace everything from the DKMS fallback comment down to the closing 'fi'
     # using awk for portable multi-line replacement
     awk -v ko="${ko_path}" '
+        /^model=\$\(dmidecode -s system-product-name 2>\/dev\/null \|\| true\)$/ {
+            print "model=\"\""
+            print "if [ -r /sys/class/dmi/id/product_name ]; then"
+            print "    model=$(sed -n \0471p\047 /sys/class/dmi/id/product_name 2>/dev/null || true)"
+            print "fi"
+            print "if [ -z \"$model\" ] && command -v dmidecode >/dev/null 2>&1; then"
+            print "    model=$(dmidecode -s system-product-name 2>/dev/null || true)"
+            print "fi"
+            next
+        }
         /# modprobe failed/ { in_dkms=1 }
         in_dkms && /^    fi$/ {
             print "        # Fallback: load module directly from persistent path (TrueNAS: dkms not available)"
             print "        KO_PATH=\"" ko "\""
             print "        if [ -f \"$KO_PATH\" ]; then"
             print "            echo \"Module led-ugreen not found for kernel $(uname -r), loading from persistent path...\""
-            print "            insmod \"$KO_PATH\" || { echo \"ERROR: insmod failed for $KO_PATH\"; exit 1; }"
+            print "            module_args=()"
+            print "            if declare -p modprobe_args >/dev/null 2>&1; then"
+            print "                module_args=(\"${modprobe_args[@]:1}\")"
+            print "            fi"
+            print "            insmod \"$KO_PATH\" \"${module_args[@]}\" || { echo \"ERROR: insmod failed for $KO_PATH\"; exit 1; }"
             print "            echo \"Module loaded successfully via insmod\""
             print "        else"
             print "            echo \"ERROR: led-ugreen.ko not found at $KO_PATH\""
@@ -1305,7 +1505,7 @@ patch_netdevmon_multi_script() {
     cat <<'EOL' > "${script_path}"
 #!/usr/bin/bash
 
-# install_ugreen_leds_controller: supports legacy netdev and iDX network_stat/network_stat2 LEDs.
+# install_ugreen_leds_controller: supports upstream netdev/netdev2 and legacy network_stat LEDs.
 
 exit-ugreen-netdevmon-multi() {
     if [[ -f "/var/run/ugreen-netdevmon-multi.lock" ]]; then
@@ -1338,13 +1538,34 @@ CHECK_LINK_SPEED_DYNAMIC=${CHECK_LINK_SPEED_DYNAMIC:=false}
 discover_leds() {
     if [[ -n "${NETDEV_LED_NAMES:-}" ]]; then
         local -a override_leds
+        local override_led
         read -r -a override_leds <<< "${NETDEV_LED_NAMES}"
+
+        # Migrate only the previously documented iDX override. Preserve every
+        # other custom configuration exactly as the user supplied it.
+        if [[ "${NETDEV_LED_NAMES}" == "network_stat network_stat2" \
+            && -d /sys/class/leds/netdev && -d /sys/class/leds/netdev2 ]]; then
+            echo "Migrating legacy network_stat/network_stat2 override to netdev/netdev2" >&2
+            printf '%s\n' netdev netdev2
+            return
+        fi
+
+        for override_led in "${override_leds[@]}"; do
+            if [[ ! -d "/sys/class/leds/${override_led}" ]]; then
+                echo "Configured network LED not found: ${override_led}" >&2
+                return 1
+            fi
+        done
         printf '%s\n' "${override_leds[@]}"
         return
     fi
 
     if [[ -d /sys/class/leds/netdev ]]; then
         echo "netdev"
+        local suffix
+        for suffix in {2..9}; do
+            [[ -d "/sys/class/leds/netdev${suffix}" ]] && echo "netdev${suffix}"
+        done
         return
     fi
 
@@ -1374,19 +1595,18 @@ discover_interfaces() {
 init_led() {
     local led="$1"
 
-    if [[ ! -d /sys/class/leds/$led ]]; then
+    if [[ ! -d "/sys/class/leds/${led}" ]]; then
         echo "Network LED not found at /sys/class/leds/$led"
         return 1
     fi
 
     modprobe ledtrig-netdev 2>/dev/null || true
-    echo netdev > /sys/class/leds/$led/trigger
-    echo "$NETDEV_BLINK_TX" > /sys/class/leds/$led/tx
-    echo "$NETDEV_BLINK_RX" > /sys/class/leds/$led/rx
-    echo "$NETDEV_BLINK_INTERVAL" > /sys/class/leds/$led/interval
-    echo "${LED_INVERT:=1}" > /sys/class/leds/$led/invert
-    echo "$COLOR_NETDEV_NORMAL" > /sys/class/leds/$led/color
-    echo "$BRIGHTNESS_NETDEV_LED" > /sys/class/leds/$led/brightness
+    echo netdev > "/sys/class/leds/${led}/trigger"
+    echo "$NETDEV_BLINK_TX" > "/sys/class/leds/${led}/tx"
+    echo "$NETDEV_BLINK_RX" > "/sys/class/leds/${led}/rx"
+    echo "$NETDEV_BLINK_INTERVAL" > "/sys/class/leds/${led}/interval"
+    echo "$COLOR_NETDEV_NORMAL" > "/sys/class/leds/${led}/color"
+    echo "$BRIGHTNESS_NETDEV_LED" > "/sys/class/leds/${led}/brightness"
 }
 
 set_speed_color() {
@@ -1412,17 +1632,17 @@ set_speed_color() {
         b=$(awk -v ratio="$ratio" -v low="${low_color[2]}" -v high="${high_color[2]}" \
             'BEGIN {printf "%.0f", low + ratio * (high - low)}')
 
-        echo "$r $g $b" > /sys/class/leds/$led/color
+        echo "$r $g $b" > "/sys/class/leds/${led}/color"
     elif [[ "$CHECK_LINK_SPEED" == "true" ]]; then
         case "$speed" in
-            100)   echo "${COLOR_NETDEV_LINK_100:-0 255 0}" > /sys/class/leds/$led/color ;;
-            1000)  echo "${COLOR_NETDEV_LINK_1000:-0 0 255}" > /sys/class/leds/$led/color ;;
-            2500)  echo "${COLOR_NETDEV_LINK_2500:-255 255 0}" > /sys/class/leds/$led/color ;;
-            10000) echo "${COLOR_NETDEV_LINK_10000:-255 255 255}" > /sys/class/leds/$led/color ;;
-            *)     echo "$COLOR_NETDEV_NORMAL" > /sys/class/leds/$led/color ;;
+            100)   echo "${COLOR_NETDEV_LINK_100:-0 255 0}" > "/sys/class/leds/${led}/color" ;;
+            1000)  echo "${COLOR_NETDEV_LINK_1000:-0 0 255}" > "/sys/class/leds/${led}/color" ;;
+            2500)  echo "${COLOR_NETDEV_LINK_2500:-255 255 0}" > "/sys/class/leds/${led}/color" ;;
+            10000) echo "${COLOR_NETDEV_LINK_10000:-255 255 255}" > "/sys/class/leds/${led}/color" ;;
+            *)     echo "$COLOR_NETDEV_NORMAL" > "/sys/class/leds/${led}/color" ;;
         esac
     else
-        echo "$COLOR_NETDEV_NORMAL" > /sys/class/leds/$led/color
+        echo "$COLOR_NETDEV_NORMAL" > "/sys/class/leds/${led}/color"
     fi
 }
 
@@ -1432,13 +1652,13 @@ bind_led_to_interface() {
     local operstate speed link_state
 
     if [[ -z "$iface" ]]; then
-        echo "" > /sys/class/leds/$led/device_name
-        echo 0 > /sys/class/leds/$led/link
+        echo "" > "/sys/class/leds/${led}/device_name"
+        echo 0 > "/sys/class/leds/${led}/link"
         return
     fi
 
-    operstate=$(cat /sys/class/net/$iface/operstate 2>/dev/null || echo "down")
-    speed=$(cat /sys/class/net/$iface/speed 2>/dev/null || echo "0")
+    operstate=$(cat "/sys/class/net/${iface}/operstate" 2>/dev/null || echo "down")
+    speed=$(cat "/sys/class/net/${iface}/speed" 2>/dev/null || echo "0")
     [[ "$speed" =~ ^[0-9]+$ ]] || speed=0
 
     if [[ "$operstate" == "up" ]]; then
@@ -1447,8 +1667,8 @@ bind_led_to_interface() {
         link_state=0
     fi
 
-    echo "$iface" > /sys/class/leds/$led/device_name
-    echo "$link_state" > /sys/class/leds/$led/link
+    echo "$iface" > "/sys/class/leds/${led}/device_name"
+    echo "$link_state" > "/sys/class/leds/${led}/link"
     set_speed_color "$led" "$speed"
 }
 
@@ -1458,9 +1678,9 @@ select_legacy_interface() {
     local operstate speed
 
     for iface in "$@"; do
-        operstate=$(cat /sys/class/net/$iface/operstate 2>/dev/null || echo "down")
+        operstate=$(cat "/sys/class/net/${iface}/operstate" 2>/dev/null || echo "down")
         if [[ "$operstate" == "up" ]]; then
-            speed=$(cat /sys/class/net/$iface/speed 2>/dev/null || echo "0")
+            speed=$(cat "/sys/class/net/${iface}/speed" 2>/dev/null || echo "0")
             [[ "$speed" =~ ^[0-9]+$ ]] || speed=0
             if [[ "$speed" -gt "$max_speed" ]]; then
                 max_speed=$speed
@@ -1496,7 +1716,7 @@ while true; do
 
     echo "Monitoring interfaces: ${interfaces[*]}"
 
-    if [[ ${#leds[@]} -eq 1 && "${leds[0]}" == "netdev" ]]; then
+    if [[ ${#leds[@]} -eq 1 ]]; then
         active_iface=$(select_legacy_interface "${interfaces[@]}")
         if [[ -n "$active_iface" ]]; then
             bind_led_to_interface "${leds[0]}" "$active_iface"
@@ -1550,45 +1770,6 @@ patch_netdevmon_script() {
     chmod +x "${script_path}"
 }
 
-patch_diskiomon_script() {
-    local script_path="$1"
-
-    if [ ! -f "${script_path}" ]; then
-        return 0
-    fi
-
-    if grep -q 'install_ugreen_leds_controller: dynamic iDX disk LED map' "${script_path}" 2>/dev/null; then
-        return 0
-    fi
-
-    if ! grep -q '^led_map=(disk1 disk2 disk3 disk4 disk5 disk6 disk7 disk8)$' "${script_path}" 2>/dev/null; then
-        return 0
-    fi
-
-    log "Patching ${script_path}: limiting disk LEDs to disk1-disk6 on iDX6011/iDX6012"
-    awk '
-        /^led_map=\(disk1 disk2 disk3 disk4 disk5 disk6 disk7 disk8\)$/ {
-            print "# install_ugreen_leds_controller: dynamic iDX disk LED map"
-            print "product_name_led_map=\"\""
-            print "if [[ -r /sys/class/dmi/id/product_name ]]; then"
-            print "  product_name_led_map=$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
-            print "fi"
-            print "case \"${product_name_led_map}\" in"
-            print "  *iDX6011*|*iDX6012*)"
-            print "    echo \"Found UGREEN iDX6011/iDX6012 series\""
-            print "    led_map=(disk1 disk2 disk3 disk4 disk5 disk6)"
-            print "    ;;"
-            print "  *)"
-            print "    led_map=(disk1 disk2 disk3 disk4 disk5 disk6 disk7 disk8)"
-            print "    ;;"
-            print "esac"
-            next
-        }
-        { print }
-    ' "${script_path}" > "${script_path}.patched" && mv "${script_path}.patched" "${script_path}"
-    chmod +x "${script_path}"
-}
-
 log_separator
 log "Installing scripts and services..."
 
@@ -1626,12 +1807,10 @@ install_scripts_and_services() {
         log "DRY RUN: would patch ${scripts_dest}/ugreen-probe-leds to use insmod fallback"
         log "DRY RUN: would patch ${scripts_dest}/ugreen-netdevmon-multi for iDX dual LAN LEDs"
         log "DRY RUN: would patch ${scripts_dest}/ugreen-netdevmon for dynamic network LED names"
-        log "DRY RUN: would patch ${scripts_dest}/ugreen-diskiomon for iDX disk LED limits"
     else
         patch_probe_leds_script "${scripts_dest}/ugreen-probe-leds" "${PERSIST_DIR}/led-ugreen.ko"
         patch_netdevmon_multi_script "${scripts_dest}/ugreen-netdevmon-multi"
         patch_netdevmon_script "${scripts_dest}/ugreen-netdevmon"
-        patch_diskiomon_script "${scripts_dest}/ugreen-diskiomon"
     fi
 
     # Also copy to /usr/bin if writable (backward compatibility)
@@ -1649,7 +1828,6 @@ install_scripts_and_services() {
             patch_probe_leds_script "/usr/bin/ugreen-probe-leds" "${PERSIST_DIR}/led-ugreen.ko"
             patch_netdevmon_multi_script "/usr/bin/ugreen-netdevmon-multi"
             patch_netdevmon_script "/usr/bin/ugreen-netdevmon"
-            patch_diskiomon_script "/usr/bin/ugreen-diskiomon"
         fi
     fi
 
@@ -1680,18 +1858,49 @@ install_scripts_and_services
 log_separator
 log "Enabling and starting services..."
 
+if [ "${CONTROLLER_PROFILE}" = "idx6011" ]; then
+    if [ "${DRY_RUN}" = "true" ]; then
+        log "DRY RUN: would enable and restart ugreen-probe-leds.service before dependent monitors"
+    else
+        systemctl enable ugreen-probe-leds.service
+        if ! systemctl restart ugreen-probe-leds.service; then
+            echo "ugreen-probe-leds.service failed; refusing to start dependent LED monitors." >&2
+            journalctl -u ugreen-probe-leds.service -n 50 --no-pager 2>/dev/null || true
+            exit 1
+        fi
+
+        if [ ! -d /sys/module/led_ugreen ]; then
+            echo "ugreen-probe-leds.service completed without loading led-ugreen." >&2
+            exit 1
+        fi
+        if ! beta_module_parameters_match; then
+            echo "The upstream beta module was not loaded with the required parameters for ${SYSTEM_PRODUCT_NAME:-this model}." >&2
+            exit 1
+        fi
+        log "ugreen-probe-leds.service completed with the expected beta module parameters"
+    fi
+fi
+
 if [ "${DRY_RUN}" = "true" ]; then
     log "DRY RUN: would enable/start ugreen-diskiomon.service"
 else
     systemctl enable ugreen-diskiomon.service || true
-    systemctl start ugreen-diskiomon.service || true
+    if [ "${CONTROLLER_PROFILE}" = "idx6011" ]; then
+        systemctl restart ugreen-diskiomon.service || true
+    else
+        systemctl start ugreen-diskiomon.service || true
+    fi
 fi
 
 if [ "${DRY_RUN}" = "true" ]; then
     log "DRY RUN: would enable/start ugreen-netdevmon-multi.service"
 else
     systemctl enable ugreen-netdevmon-multi.service || true
-    systemctl start ugreen-netdevmon-multi.service || true
+    if [ "${CONTROLLER_PROFILE}" = "idx6011" ]; then
+        systemctl restart ugreen-netdevmon-multi.service || true
+    else
+        systemctl start ugreen-netdevmon-multi.service || true
+    fi
 fi
 
 # Check for power LED configuration
@@ -1699,7 +1908,11 @@ if [ -f "$CONFIG_FILE" ] && grep -q '^BLINK_TYPE_POWER=' "$CONFIG_FILE" 2>/dev/n
     log "Enabling ugreen-power-led.service"
     if [ "${DRY_RUN}" != "true" ]; then
         systemctl enable ugreen-power-led.service || true
-        systemctl start ugreen-power-led.service || true
+        if [ "${CONTROLLER_PROFILE}" = "idx6011" ]; then
+            systemctl restart ugreen-power-led.service || true
+        else
+            systemctl start ugreen-power-led.service || true
+        fi
     fi
 fi
 
@@ -1744,7 +1957,11 @@ log_separator
 echo ""
 echo "For TrueNAS Init/Shutdown Scripts, use:"
 echo "===================================================================================="
-echo "  ${PERSIST_DIR}/install_ugreen_leds_controller.sh --yes"
+if [ "${CONTROLLER_SOURCE}" = "auto" ]; then
+    echo "  ${PERSIST_DIR}/install_ugreen_leds_controller.sh --yes"
+else
+    echo "  ${PERSIST_DIR}/install_ugreen_leds_controller.sh --yes --controller-source ${CONTROLLER_SOURCE}"
+fi
 echo "===================================================================================="
 echo ""
 echo "Reboot recommended to verify all services start correctly."
