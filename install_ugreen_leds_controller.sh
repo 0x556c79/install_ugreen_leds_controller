@@ -4,7 +4,7 @@ IFS=$'\n\t'
 
 # Cleanup function to remove the cloned repository (but NOT persistent directory)
 cleanup() {
-    if [ "${NO_CLEANUP:-false}" = "true" ]; then
+    if [ "${NO_CLEANUP:-false}" = "true" ] || [ "${DRY_RUN:-false}" = "true" ]; then
         return 0
     fi
 
@@ -927,6 +927,11 @@ check_and_remount_readonly() {
     # Match 'ro' as a distinct comma-separated mount option (avoids matching 'proc', 'errors=remount-ro', etc.)
     if echo ",${mount_opts}," | grep -q ',ro,'; then
         log "Detected read-only filesystem at ${mount_point}"
+        if [ "${DRY_RUN}" = "true" ]; then
+            log "DRY RUN: would remount ${mount_point} read-write"
+            # It remains read-only; preview the conservative persistent-file path.
+            return 1
+        fi
         if mount -o remount,rw "${mount_point}" 2>/dev/null; then
             log "Successfully remounted ${mount_point} as read-write"
             return 0
@@ -1330,7 +1335,7 @@ if [ -f "$CONFIG_FILE" ] && [ "${FORCE}" != "true" ]; then
     echo "Note: Review ${TEMPLATE_CONFIG} for new options"
     echo ""
 
-    if [ "${AUTO_YES}" != "true" ]; then
+    if [ "${AUTO_YES}" != "true" ] && [ "${DRY_RUN}" != "true" ]; then
         read -r -p "Modify LED configuration now? (y/n): " MODIFY_CONF
         if [[ "$MODIFY_CONF" == "y" ]]; then
             nano "$CONFIG_FILE"
@@ -1355,7 +1360,7 @@ elif [ -f "/etc/ugreen-leds.conf" ] && [ "${FORCE}" != "true" ]; then
         log "Configuration migrated to ${CONFIG_FILE}"
     fi
 
-    if [ "${AUTO_YES}" != "true" ]; then
+    if [ "${AUTO_YES}" != "true" ] && [ "${DRY_RUN}" != "true" ]; then
         echo ""
         echo "Note: Review ${TEMPLATE_CONFIG} for new options"
         echo ""
@@ -1371,7 +1376,7 @@ elif [ -f "/etc/ugreen-leds.conf" ] && [ "${FORCE}" != "true" ]; then
 else
     log "No existing configuration found, using template"
 
-    if [ "${AUTO_YES}" != "true" ]; then
+    if [ "${AUTO_YES}" != "true" ] && [ "${DRY_RUN}" != "true" ]; then
         read -r -p "Modify LED configuration now? (y/n): " MODIFY_CONF
         if [[ "$MODIFY_CONF" == "y" ]]; then
             nano "$TEMPLATE_CONFIG"
@@ -1492,6 +1497,32 @@ patch_probe_leds_script() {
     ' "${script_path}" > "${script_path}.patched" && mv "${script_path}.patched" "${script_path}"
     chmod +x "${script_path}"
     log "Patched ${script_path} successfully"
+}
+
+# The non-Pro iDX6011 report verifies ATA ports, not HCTL or kernel LED IDs.
+# Apply only to the explicit beta test on this exact DMI product.
+patch_diskiomon_script() {
+    local script_path="$1"
+    if [ "${CONTROLLER_PROFILE}" != "idx6011" ] || [ "${SYSTEM_PRODUCT_NAME}" != "iDX6011" ]; then
+        return 0
+    fi
+    if [ "${DRY_RUN}" = "true" ]; then
+        log "DRY RUN: would patch ${script_path} for iDX6011 ATA bay order"
+        return 0
+    fi
+    if [ ! -f "${script_path}" ]; then
+        echo "Missing disk monitor: ${script_path}" >&2
+        return 1
+    fi
+    if [ "$(grep -c '^ata_map=(' "${script_path}")" != "1" ]; then
+        echo "Unexpected upstream ATA map in ${script_path}; refusing to patch." >&2
+        return 1
+    fi
+    sed 's/^ata_map=(.*)$/ata_map=("ata3" "ata4" "ata5" "ata6" "ata1" "ata2")/' \
+        "${script_path}" > "${script_path}.patched"
+    mv "${script_path}.patched" "${script_path}"
+    chmod +x "${script_path}"
+    log "Patched ${script_path}: exact iDX6011 ATA bay order (LED names unchanged)"
 }
 
 patch_netdevmon_multi_script() {
@@ -1804,10 +1835,12 @@ install_scripts_and_services() {
 
     # Patch ugreen-probe-leds in persistent scripts dir to use insmod fallback
     if [ "${DRY_RUN}" = "true" ]; then
+        patch_diskiomon_script "${scripts_dest}/ugreen-diskiomon"
         log "DRY RUN: would patch ${scripts_dest}/ugreen-probe-leds to use insmod fallback"
         log "DRY RUN: would patch ${scripts_dest}/ugreen-netdevmon-multi for iDX dual LAN LEDs"
         log "DRY RUN: would patch ${scripts_dest}/ugreen-netdevmon for dynamic network LED names"
     else
+        patch_diskiomon_script "${scripts_dest}/ugreen-diskiomon"
         patch_probe_leds_script "${scripts_dest}/ugreen-probe-leds" "${PERSIST_DIR}/led-ugreen.ko"
         patch_netdevmon_multi_script "${scripts_dest}/ugreen-netdevmon-multi"
         patch_netdevmon_script "${scripts_dest}/ugreen-netdevmon"
@@ -1825,6 +1858,7 @@ install_scripts_and_services() {
         done
         # Also patch the /usr/bin copy
         if [ "${DRY_RUN}" != "true" ]; then
+            patch_diskiomon_script "/usr/bin/ugreen-diskiomon"
             patch_probe_leds_script "/usr/bin/ugreen-probe-leds" "${PERSIST_DIR}/led-ugreen.ko"
             patch_netdevmon_multi_script "/usr/bin/ugreen-netdevmon-multi"
             patch_netdevmon_script "/usr/bin/ugreen-netdevmon"

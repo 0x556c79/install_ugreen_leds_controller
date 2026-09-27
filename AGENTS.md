@@ -74,6 +74,7 @@ The script is a single file (~1,960 lines) organized into named functions:
 | `copy_installer_to_persistent_dir()` | Self-replicates for use as TrueNAS Init Script |
 | `install_kernel_module()` | Downloads, validates, atomically caches, and installs the selected `.ko` |
 | `patch_probe_leds_script()` | Preserves upstream module arguments in the TrueNAS `insmod` fallback |
+| `patch_diskiomon_script()` | Applies the reported ATA order only to exact non-Pro iDX6011 on beta |
 | `patch_netdevmon_multi_script()` | Maps ordered NICs to stable or upstream-beta network LED names |
 | `check_and_remove_existing_services()` | Removes legacy `ugreen-netdevmon@*` instances |
 | `install_scripts_and_services()` | Copies scripts to `/usr/bin/`, installs + enables systemd units |
@@ -99,6 +100,7 @@ The installer itself has no compilation or package-manager step. Validate it wit
 bash -n install_ugreen_leds_controller.sh
 shellcheck install_ugreen_leds_controller.sh
 git diff --check
+python3 -m unittest discover -s tests -v
 ```
 
 The repository still contains temporary TrueNAS module build tooling solely for

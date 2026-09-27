@@ -35,64 +35,60 @@ curl -sf https://raw.githubusercontent.com/0x556c79/install_ugreen_leds_controll
 > - [x] UGREEN DXP8800 Plus ([upstream #1](https://github.com/miskcoo/ugreen_leds_controller/issues/1), [supporting repository](https://github.com/meyergru/ugreen_dxp8800_leds_controller)); developed and tested with this installer on this model.
 > - [ ] UGREEN DXP480T Plus ([upstream #6 comment](https://github.com/miskcoo/ugreen_leds_controller/issues/6#issuecomment-2156807225))
 > - [ ] UGREEN iDX6011 Pro (**Experimental candidate**, automatically selects upstream [v0.4-beta](https://github.com/miskcoo/ugreen_leds_controller/releases/tag/v0.4-beta); hardware validation is still required in [#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23)).
-> - [ ] UGREEN iDX6011 / iDX6012 (**Manual experimental only** via `--controller-source idx6011`; not automatically selected or confirmed by this installer).
+> - [ ] UGREEN iDX6011 (**Manual beta test candidate** via `--controller-source idx6011`; the report in [#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23#issuecomment-5848438206) tested the old fork, not this beta).
 
 If upstream confirms another model as working and you have tested this installer on it, feel free to open an issue or pull request here!
 
-### iDX6011 Pro upstream beta source
+### iDX6011 / iDX6011 Pro upstream beta test
 
-The iDX6011 family uses a different LED protocol from the stable DX/DXP implementation. This candidate replaces the former third-party source with official upstream `v0.4-beta`, pinned to commit `c830a2293cf5c67c58e5a98ca339b089b2b13fc3`.
+The `idx6011` profile uses official upstream `v0.4-beta`, pinned to
+`c830a2293cf5c67c58e5a98ca339b089b2b13fc3`. `auto` selects it **only for exact
+DMI `iDX6011 Pro`**. An `iDX6011` test must explicitly use
+`--controller-source idx6011`, including in the TrueNAS Post Init command.
+Other models retain their existing stable-profile selection.
 
-The default `--controller-source auto` selects this beta only when the exact DMI product name is `iDX6011 Pro`. Every other model remains on stable upstream `master`. The related `iDX6011` and `iDX6012` names are manual experimental overrides until they have separate hardware reports.
+| Exact DMI | Upstream beta probe arguments | Automatic beta selection |
+| --- | --- | --- |
+| `iDX6011` | `write_protocol=smbus-block`; LED counts left unspecified | No |
+| `iDX6011 Pro` | `write_protocol=smbus-block num_netdev_leds=2 num_disk_leds=6` | Yes |
 
-```bash
-sudo bash install_ugreen_leds_controller.sh --controller-source auto      # exact Pro selects beta
-sudo bash install_ugreen_leds_controller.sh --controller-source idx6011   # force upstream v0.4-beta
-sudo bash install_ugreen_leds_controller.sh --controller-source upstream  # force stable master
-```
+Unspecified count parameters may read `-1` in sysfs. They select the driver's
+current default layout; they do **not** establish the device's physical LED
+mapping. Treat the two models separately until hardware evidence establishes
+otherwise. Upstream also recognizes `iDX6012` internally, but this project has
+no evidence of a shipping/tested device under that name and does not claim
+hardware support for it.
 
-The beta module comes from upstream's tagged [`gh-actions` artifact tree](https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/tags/v0.4-beta). That tree currently has exact-version artifacts for the 25.04 and 25.10 trains through 25.10.5; it does not contain 24.04 or 24.10 artifacts. The installer requires an exact `/etc/version` match for this profile and never falls back to an older beta module or to the former third-party branch.
+The module comes from upstream's [tagged artifact tree](https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/tags/v0.4-beta).
+This profile requires an exact TrueNAS-version artifact and matching running
+kernel; it never falls back to an older version, stable module, or old fork.
+The 25.10.5 beta artifact has been checked against kernel
+`6.12.95-production+truenas` and the upstream tagged build log.
 
-For the exact Pro layout, the expected sysfs LEDs are `power`, `netdev`, `netdev2`, and `disk1` through `disk6`. The monitor assigns detected physical NICs to `netdev` and `netdev2` in sorted order. Optional overrides can be set in `/etc/ugreen-leds.conf`:
+For exact `iDX6011` only, the installed beta disk monitor uses the reported
+bay order `ata3 ata4 ata5 ata6 ata1 ata2`. This changes the ATA table only.
+It does not rename LEDs, change HCTL/serial mappings, or apply the non-Pro
+ordering to Pro hardware. The old `network_stat2` disk-bay workaround must
+be removed from the beta test's Post Init command.
 
-```bash
-NETDEV_LED_NAMES="netdev netdev2"
-NETDEV_INTERFACE_NAMES="enp1s0 enp2s0"
-```
-
-An existing exact override of `network_stat network_stat2` is translated at runtime when the new `netdev` paths exist. Other custom LED-name configurations are left unchanged.
-
-For a manual `iDX6011` or `iDX6012` test, keep `--controller-source idx6011` in the TrueNAS Init Script command on every boot. Exact `iDX6011 Pro` systems can use the default `auto` selection.
+Existing configuration is preserved. A legacy custom override such as
+`NETDEV_LED_NAMES="network_stat"` must be cleared for the first beta test
+**after backing it up**. The monitor translates the previously documented
+pair `network_stat network_stat2` only when both new `netdev` paths exist;
+other custom overrides are not silently rewritten. Set explicit NIC/LED
+pairs only after identifying their physical locations.
 
 > [!WARNING]
-> Upstream PR #104 was not tested on iDX6011 Pro hardware and its initialization differs from the previously working fork. Keep the fallback available and do not merge this candidate until the probe, both LAN LEDs, all six disk LEDs, and reboot persistence pass on real hardware. The pre-migration installer at commit `b3ce00f` remains the rollback path.
+> This is a hardware-test candidate. The old fork report does not validate
+> upstream beta. Keep PR #28 in draft and retain the fallback workflow,
+> build scripts and `idx6011-kmods` branch until model-specific physical LED,
+> disk activity, network and reboot acceptance pass.
 
-#### iDX6011 Pro hardware test gate
-
-Before installing, record the exact host and bus information and confirm that both the tagged beta artifact and rollback artifact are available:
-
-```bash
-cat /etc/version
-uname -r
-cat /sys/class/dmi/id/product_name
-i2cdetect -l
-```
-
-Test the candidate first with the explicit beta profile:
-
-```bash
-curl -sf https://raw.githubusercontent.com/0x556c79/install_ugreen_leds_controller/migrate-idx6011-upstream-beta/install_ugreen_leds_controller.sh -o install_ugreen_leds_controller.sh
-sudo bash install_ugreen_leds_controller.sh --controller-source idx6011
-```
-
-Acceptance requires module parameters `smbus-block`, `2`, and `6`; LEDs `power`, `netdev`, `netdev2`, and `disk1`–`disk6`; a stopped rolling boot animation; independent activity on both LAN LEDs; no disk7/disk8, I²C, or status errors; healthy probe/disk/network services; and a successful reboot using the same cached tagged module. After the explicit-profile run passes, rerun with `--controller-source auto` and confirm the same source marker is reused without downloading again.
-
-If any check fails, reinstall the known-working third-party profile with the pre-migration installer and report the captured service/kernel evidence upstream:
-
-```bash
-curl -sf https://raw.githubusercontent.com/0x556c79/install_ugreen_leds_controller/b3ce00f/install_ugreen_leds_controller.sh -o install_ugreen_leds_controller.sh
-sudo bash install_ugreen_leds_controller.sh --controller-source idx6011
-```
+Use the [copy/paste hardware-test and rollback procedure](docs/idx6011-hardware-test.md).
+It covers backup, explicit beta selection, a verified old-module unload,
+loaded parameters, individual LED identification, separate ATA and NIC tests,
+and reboot persistence. `.module-source` identifies the cached artifact;
+it does not by itself prove which binary is currently loaded.
 
 ## TrueNAS Scale Read-Only Filesystem Support
 

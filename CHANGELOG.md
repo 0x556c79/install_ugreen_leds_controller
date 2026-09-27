@@ -14,8 +14,9 @@ All notable changes to this project will be documented in this file.
   artifact tree.
 - Preserved `--controller-source <auto|upstream|idx6011>` while narrowing
   automatic beta selection to the exact `iDX6011 Pro` DMI product name.
-  Related `iDX6011` and `iDX6012` variants remain manual experimental paths;
-  all other models keep stable upstream `master` behavior.
+  Exact `iDX6011` remains a manual beta test; internal upstream `iDX6012`
+  detection is unverified, not a hardware-support claim. All other models
+  keep stable upstream `master` behavior.
 - The beta profile now requires an exact TrueNAS-version artifact. Its tagged
   tree covers the 25.04 and 25.10 trains through 25.10.5, but not 24.04 or
   24.10; it never uses stable, older-version, or third-party fallbacks.
@@ -43,6 +44,17 @@ hardware-test rollback. They must not be removed or merged away until the
 candidate passes iDX6011 Pro hardware and reboot acceptance.
 
 ---
+
+### Fixed
+
+- Prevent filesystem remounts, configuration editor invocation and cleanup
+  deletion during `--dry-run`; regression checks cover full install and
+  uninstall previews with existing and new configuration.
+- Apply the reported `ata3 ata4 ata5 ata6 ata1 ata2` bay order only to exact
+  `iDX6011` with the beta profile. Preserve upstream LED names, HCTL/serial
+  mappings and all other model mappings, including `iDX6011 Pro`.
+- Replace the Pro-only acceptance instructions with a model-specific
+  procedure that records physical LED mapping and includes backup and rollback.
 
 ## [2.0.9] - 2026-04-18
 
