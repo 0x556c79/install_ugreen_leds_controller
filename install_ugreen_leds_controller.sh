@@ -41,6 +41,7 @@ help() {
     echo "                        upstream: force stable upstream master"
     echo "                        idx6011: force experimental upstream v0.4-beta"
     echo
+    echo "  --idx-test <collect|install>  Collect hardware feedback or run a backed-up beta test"
     echo "  --uninstall           Fully uninstall: stop services, unload modules, remove files"
     echo "  --dry-run             Show actions without making changes"
     echo "  --yes                 Assume 'yes' to all prompts (non-interactive mode)"
@@ -128,6 +129,11 @@ DRY_RUN=false
 AUTO_YES=false
 FORCE=false
 UNINSTALL=false
+IDX_TEST_MODE=""
+IDX_TEST_DIR=""
+IDX_TEST_RESULT=""
+IDX_TEST_MODULE_LOADED_FROM_CACHE=false
+IDX_TEST_UNITS=()
 READONLY_ROOT=false
 NEED_MODULE_DOWNLOAD=false
 CLONED_REPO=false
@@ -159,6 +165,14 @@ while [[ $# -gt 0 ]]; do
             CONTROLLER_SOURCE="$2"
             shift 2
             ;;
+        --idx-test)
+            if [ "$#" -lt 2 ] || [[ "$2" != collect && "$2" != install ]]; then
+                echo "Use --idx-test collect or --idx-test install." >&2
+                exit 1
+            fi
+            IDX_TEST_MODE="$2"
+            shift 2
+            ;;
         --dry-run)
             DRY_RUN=true
             shift
@@ -184,6 +198,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Ensure script is run as root
+if [ -n "$IDX_TEST_MODE" ] && { [ "$UNINSTALL" = true ] || [ "$FORCE" = true ] || [ -n "$TRUENAS_VERSION" ] || [ "$CONTROLLER_SOURCE" != auto ] || [ "$USE_CURRENT_DIR" = true ] || [ -n "$POOL_PATH" ]; }; then
+    echo "--idx-test accepts only --persist-dir, --dry-run and --yes as additional options." >&2
+    exit 1
+fi
+
 if [ "${EUID:-0}" -ne 0 ] && [ "${DRY_RUN}" != "true" ]; then
     echo "Please run as root."
     exit 1
@@ -301,6 +320,407 @@ select_controller_profile() {
         log "WARNING: idx6011 is an experimental manual override for this DMI product; only iDX6011 Pro receives the upstream 2-LAN/6-disk layout automatically"
     fi
 }
+
+# Two-stage hardware feedback runner. The normal installer runs as a child so
+# every failure can be reported without claiming physical hardware acceptance.
+idx_test_find_persist_dir() {
+    local detected="" script_dir
+    if [ -z "${PERSIST_DIR}" ]; then
+        detected=$(systemctl cat ugreen-diskiomon.service 2>/dev/null |
+            sed -n 's|^ExecStart=\(/mnt/.*\)/scripts/ugreen-diskiomon$|\1|p' | head -n 1 || true)
+        script_dir=$(dirname "$(readlink -f "$0")")
+        if [ -n "$detected" ]; then
+            PERSIST_DIR="$detected"
+        elif [ -f "${script_dir}/led-ugreen.ko" ]; then
+            PERSIST_DIR="$script_dir"
+        elif [ -f "${PWD}/leds_controller/led-ugreen.ko" ]; then
+            PERSIST_DIR="${PWD}/leds_controller"
+        fi
+    fi
+    if [ -z "${PERSIST_DIR}" ] && [ "$IDX_TEST_MODE" = collect ]; then
+        PERSIST_DIR="/tmp/ugreen-leds-not-configured"
+        echo "No existing installation detected; collecting hardware information in /tmp."
+        return 0
+    fi
+    if [ -z "${PERSIST_DIR}" ]; then
+        echo "Cannot locate the existing installation. Add --persist-dir /mnt/<pool>/leds_controller." >&2
+        return 1
+    fi
+    PERSIST_DIR=$(realpath -m -- "$PERSIST_DIR")
+    case "$PERSIST_DIR" in
+        /mnt/*) ;;
+        *) echo "Test storage must be under /mnt/." >&2; return 1 ;;
+    esac
+    if [[ "$PERSIST_DIR" == *$'\n'* ]] || [ ! -d "$(dirname "$PERSIST_DIR")" ]; then
+        echo "The parent of the persistent directory must exist on your pool." >&2
+        return 1
+    fi
+}
+
+idx_test_capture() {
+    local path name value iface
+    printf 'Time: '; date -u
+    printf 'Stage: %s\nPersistent directory: %s\n' "$IDX_TEST_MODE" "$PERSIST_DIR"
+    printf 'TrueNAS: '; cat /etc/version 2>/dev/null || true
+    printf 'Kernel: '; uname -r
+    for name in product_name product_version board_name; do
+        printf 'DMI %s: ' "$name"
+        cat "/sys/class/dmi/id/$name" 2>/dev/null || true
+    done
+    printf '\nCached module source:\n'; cat "$PERSIST_DIR/.module-source" 2>/dev/null || true
+    if [ -f "$PERSIST_DIR/led-ugreen.ko" ]; then
+        sha256sum "$PERSIST_DIR/led-ugreen.ko" || true
+        modinfo "$PERSIST_DIR/led-ugreen.ko" 2>/dev/null || true
+    fi
+    printf '\nInstalled module lookup (not proof of the loaded binary):\n'
+    modinfo -n led-ugreen 2>/dev/null || true
+    for name in version srcversion parameters/write_protocol parameters/num_netdev_leds parameters/num_disk_leds; do
+        printf 'Loaded %s: ' "$name"
+        cat "/sys/module/led_ugreen/$name" 2>/dev/null || true
+    done
+    printf '\nLEDs and current triggers:\n'
+    for path in /sys/class/leds/*; do
+        [ -e "$path" ] || continue
+        printf '%s: ' "${path##*/}"
+        cat "$path/trigger" 2>/dev/null || true
+    done
+    printf '\nI2C adapters (list only, no bus scan):\n'
+    i2cdetect -l 2>/dev/null || true
+    printf '\nStorage, SMBus and network PCI controllers:\n'
+    lspci -nn 2>/dev/null | grep -Ei 'SMBus|SATA|RAID|Ethernet|VMD' || true
+    printf '\nDisk enumeration (serial numbers omitted):\n'
+    lsblk -S -o NAME,HCTL,TRAN,MODEL 2>/dev/null || true
+    for path in /sys/block/sd*; do
+        [ -e "$path" ] || continue
+        printf '%s -> %s\n' "${path##*/}" "$(readlink -f "$path")"
+    done
+    printf '\nPhysical network interfaces (addresses omitted):\n'
+    for path in /sys/class/net/*; do
+        [ -e "$path/device" ] || continue
+        iface="${path##*/}"
+        printf '%s' "$iface"
+        for name in operstate carrier speed; do
+            value=$(cat "$path/$name" 2>/dev/null || true)
+            printf ' %s=%s' "$name" "$value"
+        done
+        printf '\n'
+    done
+    printf '\nRelevant configuration:\n'
+    for path in "$PERSIST_DIR/ugreen-leds.conf" /etc/ugreen-leds.conf; do
+        printf '%s\n' "$path"
+        grep -E '^(NETDEV_LED_NAMES|NETDEV_INTERFACE_NAMES|MAPPING_METHOD|BLINK_TYPE_POWER)=' "$path" 2>/dev/null || true
+    done
+    printf '\nInstalled ATA table:\n'
+    grep -n 'ata_map=' "$PERSIST_DIR/scripts/ugreen-diskiomon" 2>/dev/null || true
+    printf '\nService state:\n'
+    systemctl status --no-pager --full ugreen-probe-leds.service ugreen-diskiomon.service ugreen-netdevmon-multi.service ugreen-power-led.service 2>&1 || true
+    printf '\nRecent LED service journal:\n'
+    journalctl -b --no-pager -n 100 -u ugreen-probe-leds.service -u ugreen-diskiomon.service -u ugreen-netdevmon-multi.service -u ugreen-power-led.service 2>&1 || true
+}
+
+idx_test_backup() {
+    local path name unit state kernel units recovery_module=""
+    local -a paths=()
+    kernel=$(uname -r)
+    mkdir -p "$IDX_TEST_DIR/backup"
+    : > "$IDX_TEST_DIR/backup/absent.txt"
+    : > "$IDX_TEST_DIR/backup/active.txt"
+    : > "$IDX_TEST_DIR/backup/enabled.txt"
+    : > "$IDX_TEST_DIR/backup/module-args.txt"
+    # Only installer-owned paths; do not archive arbitrary pool contents.
+    for name in led-ugreen.ko .version .module-source .installer-source ugreen-leds.conf install_ugreen_leds_controller.sh; do
+        paths+=("$PERSIST_DIR/$name")
+    done
+    for name in ugreen-diskiomon ugreen-netdevmon ugreen-netdevmon-multi ugreen-probe-leds ugreen-power-led; do
+        paths+=("$PERSIST_DIR/scripts/$name" "/usr/bin/$name")
+    done
+    paths+=(/etc/ugreen-leds.conf /etc/modules-load.d/ugreen-led.conf "/lib/modules/$kernel/extra/led-ugreen.ko")
+    units=$(systemctl list-unit-files --no-legend --plain 'ugreen-*.service')
+    mapfile -t IDX_TEST_UNITS < <(printf '%s\n' "$units" | awk 'NF {print $1}')
+    for unit in ugreen-probe-leds.service ugreen-diskiomon.service ugreen-netdevmon-multi.service ugreen-power-led.service "${IDX_TEST_UNITS[@]}"; do
+        [[ "$unit" =~ ^ugreen-[a-zA-Z0-9@_.:-]+\.service$ ]] || continue
+        paths+=("/etc/systemd/system/$unit" "/etc/systemd/system/multi-user.target.wants/$unit")
+        if systemctl is-active --quiet "$unit"; then
+            printf '%s\n' "$unit" >> "$IDX_TEST_DIR/backup/active.txt"
+        fi
+        state=$(systemctl is-enabled "$unit" 2>/dev/null || true)
+        printf '%s %s\n' "$unit" "$state" >> "$IDX_TEST_DIR/backup/enabled.txt"
+    done
+    if [ -d /sys/module/led_ugreen ]; then
+        recovery_module="$PERSIST_DIR/led-ugreen.ko"
+        if [ ! -f "$recovery_module" ]; then
+            recovery_module=$(modinfo -n led-ugreen)
+            case "$recovery_module" in
+                /lib/modules/*|/usr/lib/modules/*) ;;
+                *) echo 'Cannot locate an old module for recovery; stopping before changes.' >&2; return 1 ;;
+            esac
+        fi
+        [ -f "$recovery_module" ] || { echo 'Old module file is missing; cannot back it up.' >&2; return 1; }
+        if [ "$(modinfo -F vermagic "$recovery_module" | awk '{print $1}')" != "$kernel" ]; then
+            echo 'Old module cannot be verified for the running kernel; stopping before changes.' >&2
+            return 1
+        fi
+        paths+=("$recovery_module")
+        printf '%s\n' "$recovery_module" > "$IDX_TEST_DIR/backup/module-path"
+    fi
+    local -a existing=()
+    for path in "${paths[@]}"; do
+        if [ -e "$path" ] || [ -L "$path" ]; then
+            existing+=("${path#/}")
+        else
+            printf '%s\n' "$path" >> "$IDX_TEST_DIR/backup/absent.txt"
+        fi
+    done
+    # An empty archive is valid for a first installation.
+    tar -cpf "$IDX_TEST_DIR/backup/files.tar" -C / --files-from /dev/null -- "${existing[@]}"
+    tar -tf "$IDX_TEST_DIR/backup/files.tar" > "$IDX_TEST_DIR/backup/manifest.txt"
+    if [ -d /sys/module/led_ugreen ]; then
+        touch "$IDX_TEST_DIR/backup/module-was-loaded"
+        for name in write_protocol num_netdev_leds num_disk_leds; do
+            path="/sys/module/led_ugreen/parameters/$name"
+            if [ -r "$path" ]; then
+                printf '%s=%s\n' "$name" "$(cat "$path")" >> "$IDX_TEST_DIR/backup/module-args.txt"
+            fi
+        done
+    fi
+    printf '%s\n' "$kernel" > "$IDX_TEST_DIR/backup/kernel"
+    {
+        printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+        printf 'RUN_DIR=%q\nPERSIST_DIR=%q\n' "$IDX_TEST_DIR" "$PERSIST_DIR"
+        cat <<'ROLLBACK'
+if [ "${EUID}" -ne 0 ]; then echo 'Run this recovery script with sudo bash.'; exit 1; fi
+[ "$(uname -r)" = "$(cat "$RUN_DIR/backup/kernel")" ] || { echo 'Kernel changed; stop and ask the maintainer.'; exit 1; }
+# A failed test may never have reached the installer's writable-mount setup.
+# Prepare protected restore destinations before stopping the current services.
+for restore_path in /usr /etc "/lib/modules/$(uname -r)"; do
+    mount_target=$(findmnt -n -o TARGET --target "$restore_path")
+    mount_options=$(findmnt -n -o OPTIONS --target "$restore_path")
+    case ",$mount_options," in
+        *,ro,*)
+            mount -o remount,rw "$mount_target" || { echo "Cannot make $mount_target writable for recovery."; exit 1; }
+            mount_options=$(findmnt -n -o OPTIONS --target "$restore_path")
+            case ",$mount_options," in *,ro,*) echo "Still read-only: $restore_path"; exit 1;; esac
+            ;;
+    esac
+done
+unit_listing=$(systemctl list-units --state=active --plain --no-legend 'ugreen-*.service')
+mapfile -t units < <(printf '%s\n' "$unit_listing" | awk 'NF {print $1}')
+for unit in "${units[@]}"; do systemctl stop "$unit"; done
+if [ -d /sys/module/led_ugreen ]; then rmmod led-ugreen; fi
+[ ! -d /sys/module/led_ugreen ] || { echo 'Module is still loaded; stopping.'; exit 1; }
+# Restore only the recorded installer-owned files, including the old disk patch.
+while IFS= read -r path; do
+    [ ! -e "$path" ] && [ ! -L "$path" ] || rm -f -- "$path"
+done < "$RUN_DIR/backup/absent.txt"
+tar -xpf "$RUN_DIR/backup/files.tar" -C /
+depmod -a
+systemctl daemon-reload
+while read -r unit state; do
+    case "$state" in
+        enabled) systemctl enable "$unit" ;;
+        enabled-runtime) systemctl enable --runtime "$unit" ;;
+        disabled|not-found|'') systemctl disable "$unit" 2>/dev/null || true ;;
+    esac
+done < "$RUN_DIR/backup/enabled.txt"
+if [ -f "$RUN_DIR/backup/module-was-loaded" ]; then
+    mapfile -t args < "$RUN_DIR/backup/module-args.txt"
+    modprobe -a i2c-dev ledtrig-oneshot ledtrig-netdev
+    module_path=$(cat "$RUN_DIR/backup/module-path")
+    insmod "$module_path" "${args[@]}"
+fi
+while IFS= read -r unit; do systemctl start "$unit"; done < "$RUN_DIR/backup/active.txt"
+echo 'Previous LED installation restored. Check the LEDs and services.'
+echo 'TrueNAS Init/Shutdown entries were not changed by the test.'
+ROLLBACK
+    } > "$IDX_TEST_DIR/rollback.sh.tmp"
+    bash -n "$IDX_TEST_DIR/rollback.sh.tmp"
+    chmod 700 "$IDX_TEST_DIR/rollback.sh.tmp"
+    mv -- "$IDX_TEST_DIR/rollback.sh.tmp" "$IDX_TEST_DIR/rollback.sh"
+}
+
+idx_test_prepare_install() {
+    local unit units config="$PERSIST_DIR/ugreen-leds.conf"
+    units=$(systemctl list-units --state=active --plain --no-legend 'ugreen-*.service')
+    mapfile -t IDX_TEST_UNITS < <(printf '%s\n' "$units" | awk 'NF {print $1}')
+    for unit in "${IDX_TEST_UNITS[@]}"; do systemctl stop "$unit"; done
+    if [ -d /sys/module/led_ugreen ]; then rmmod led-ugreen; fi
+    if [ -d /sys/module/led_ugreen ]; then
+        echo 'Old module is still loaded; refusing the beta test.' >&2
+        return 1
+    fi
+    echo 'Old LED module confirmed absent before beta installation.'
+    mkdir -p "$PERSIST_DIR"
+    if [ ! -f "$config" ] && [ -f /etc/ugreen-leds.conf ]; then
+        cp -a /etc/ugreen-leds.conf "$config"
+    fi
+    if [ -f "$config" ]; then
+        # Preserve unrelated options. Old LED/interface overrides can obscure a
+        # clean beta test; backups contain the original configuration verbatim.
+        sed -E '/^[[:space:]]*(export[[:space:]]+)?NETDEV_(LED_NAMES|INTERFACE_NAMES)[[:space:]]*=/d' "$config" > "$config.idx-test"
+        printf '\nNETDEV_LED_NAMES=""\nNETDEV_INTERFACE_NAMES=""\n' >> "$config.idx-test"
+        if [ "$SYSTEM_PRODUCT_NAME" = iDX6011 ]; then
+            sed -i -E '/^[[:space:]]*(export[[:space:]]+)?MAPPING_METHOD[[:space:]]*=/d' "$config.idx-test"
+            printf 'MAPPING_METHOD=ata\n' >> "$config.idx-test"
+        fi
+        chmod --reference="$config" "$config.idx-test"
+        mv -- "$config.idx-test" "$config"
+    fi
+    # Force both sources to refresh without --force (which discards config).
+    rm -f -- "$PERSIST_DIR/.module-source" "$PERSIST_DIR/.installer-source"
+}
+
+# Explicitly load the validated cached image for the test. A modprobe lookup
+# alone cannot identify the resident binary when srcversion is unavailable.
+idx_test_load_cached_module() {
+    local units unit
+    local -a args=(write_protocol=smbus-block)
+    IDX_TEST_MODULE_LOADED_FROM_CACHE=false
+    units=$(systemctl list-units --state=active --plain --no-legend 'ugreen-*.service')
+    mapfile -t IDX_TEST_UNITS < <(printf '%s\n' "$units" | awk 'NF {print $1}')
+    for unit in "${IDX_TEST_UNITS[@]}"; do systemctl stop "$unit"; done
+    if [ -d /sys/module/led_ugreen ]; then rmmod led-ugreen; fi
+    [ ! -d /sys/module/led_ugreen ] || { echo 'Cannot replace the loaded module.' >&2; return 1; }
+    if [ "$SYSTEM_PRODUCT_NAME" = 'iDX6011 Pro' ]; then
+        args+=(num_netdev_leds=2 num_disk_leds=6)
+    fi
+    modprobe -a i2c-dev ledtrig-oneshot ledtrig-netdev
+    sha256sum "$PERSIST_DIR/led-ugreen.ko"
+    insmod "$PERSIST_DIR/led-ugreen.ko" "${args[@]}"
+    IDX_TEST_MODULE_LOADED_FROM_CACHE=true
+    echo "Loaded the test binary directly from $PERSIST_DIR/led-ugreen.ko"
+    systemctl restart ugreen-probe-leds.service
+    systemctl restart ugreen-diskiomon.service ugreen-netdevmon-multi.service
+    if [ -f "$PERSIST_DIR/ugreen-leds.conf" ] && grep -q '^BLINK_TYPE_POWER=' "$PERSIST_DIR/ugreen-leds.conf" && ! grep -q '^BLINK_TYPE_POWER=none$' "$PERSIST_DIR/ugreen-leds.conf"; then
+        systemctl restart ugreen-power-led.service
+    fi
+}
+
+idx_test_verify() {
+    local name cached loaded source
+    [ "${IDX_TEST_MODULE_LOADED_FROM_CACHE:-false}" = true ] || { echo 'Active module identity was not established.'; return 1; }
+    source=$(cat "$PERSIST_DIR/.module-source")
+    [ "$source" = "idx6011:miskcoo/ugreen_leds_controller@${IDX_UPSTREAM_TAG}:${IDX_UPSTREAM_COMMIT}:gh-actions:build-scripts/truenas/build/tags/${IDX_UPSTREAM_TAG}" ] || { echo 'Unexpected module source.'; return 1; }
+    [ -d /sys/module/led_ugreen ] || { echo 'LED module is not loaded.'; return 1; }
+    [ "$(cat /sys/module/led_ugreen/parameters/write_protocol)" = smbus-block ] || { echo 'Wrong loaded protocol.'; return 1; }
+    [ "$(modinfo -F vermagic "$PERSIST_DIR/led-ugreen.ko" | awk '{print $1}')" = "$(uname -r)" ] || { echo 'Kernel/module mismatch.'; return 1; }
+    cached=$(modinfo -F srcversion "$PERSIST_DIR/led-ugreen.ko" 2>/dev/null || true)
+    loaded=$(cat /sys/module/led_ugreen/srcversion 2>/dev/null || true)
+    if [ -n "$cached" ] && [ -n "$loaded" ] && [ "$cached" != "$loaded" ]; then
+        echo 'Loaded binary does not match the cached module.'; return 1
+    fi
+    for name in num_netdev_leds num_disk_leds; do
+        [ -r "/sys/module/led_ugreen/parameters/$name" ] || { echo "Missing module parameter: $name"; return 1; }
+    done
+    if [ "$SYSTEM_PRODUCT_NAME" = 'iDX6011 Pro' ]; then
+        if [ "$(cat /sys/module/led_ugreen/parameters/num_netdev_leds)" != 2 ] ||
+           [ "$(cat /sys/module/led_ugreen/parameters/num_disk_leds)" != 6 ]; then
+            echo 'Pro parameters not applied.'; return 1
+        fi
+        [ -d /sys/class/leds/netdev2 ] || { echo 'Pro netdev2 missing.'; return 1; }
+    fi
+    for name in power netdev disk1 disk2 disk3 disk4 disk5 disk6; do
+        [ -d "/sys/class/leds/$name" ] || { echo "LED missing: $name"; return 1; }
+    done
+    for name in ugreen-probe-leds.service ugreen-diskiomon.service ugreen-netdevmon-multi.service; do
+        systemctl is-active --quiet "$name" || { echo "Service not active: $name"; return 1; }
+    done
+    if [ -f "$PERSIST_DIR/ugreen-leds.conf" ] && grep -q '^BLINK_TYPE_POWER=' "$PERSIST_DIR/ugreen-leds.conf" && ! grep -q '^BLINK_TYPE_POWER=none$' "$PERSIST_DIR/ugreen-leds.conf"; then
+        systemctl is-active --quiet ugreen-power-led.service || { echo 'Power LED service not active.'; return 1; }
+    fi
+}
+
+idx_test_finish() {
+    local status="$1"
+    trap - EXIT
+    set +e
+    if [ "$IDX_TEST_MODE" = install ]; then
+        idx_test_capture > "$IDX_TEST_DIR/after.txt" 2>&1
+    fi
+    if {
+        printf '# UGREEN iDX hardware feedback\n\nStage: %s\n' "$IDX_TEST_MODE"
+        printf 'Technical result: %s (exit %s)\n' "$IDX_TEST_RESULT" "$status"
+        printf '\nPlease complete before posting in issue #23:\n'
+        printf -- '- Commercial model printed on device/box: ...\n- Power LED correct / boot animation stopped: ...\n- LAN LED(s) correspond to the connected port(s): ...\n- Disk LEDs correspond to bays 1–6; empty bays stay off: ...\n- Unexpected LEDs, errors or other observations: ...\n- Reboot tested: not tested\n'
+        printf '\nPhysical LED mapping is NOT verified automatically.\n'
+        printf '\n## Before\n```text\n'; cat "$IDX_TEST_DIR/before.txt"; printf '\n```\n'
+        if [ -f "$IDX_TEST_DIR/after.txt" ]; then
+            printf '\n## After\n```text\n'; cat "$IDX_TEST_DIR/after.txt"; printf '\n```\n'
+        fi
+        if [ -f "$IDX_TEST_DIR/install.log" ]; then
+            printf '\n## Installer and verification (last 160 lines)\n```text\n'
+            tail -n 160 "$IDX_TEST_DIR/install.log"; printf '\n```\n'
+        fi
+    } > "$IDX_TEST_DIR/feedback.md"; then
+        :
+    else
+        status=1
+        echo "ERROR: Could not write the complete feedback report at $IDX_TEST_DIR/feedback.md" >&2
+    fi
+    printf '\n==================================================\n'
+    if [ "$status" -eq 0 ] && [ "$IDX_TEST_RESULT" = 'TECHNICAL PASS' ]; then
+        echo 'SUCCESS: beta module and required LED services passed the technical checks.'
+        echo 'Now check the physical power, LAN and disk LEDs. Their mapping still needs your feedback.'
+    elif [ "$status" -eq 0 ]; then
+        echo 'Information collected. No installation, module or service changes were made.'
+        echo 'Send this report before proceeding to the installation test.'
+    else
+        echo 'FAILED: the beta test did not complete successfully. Do not report it as working.'
+    fi
+    printf 'Feedback file: %s/feedback.md\n' "$IDX_TEST_DIR"
+    printf 'Show report: sudo cat %q\n' "$IDX_TEST_DIR/feedback.md"
+    echo 'Paste its contents into your comment in issue #23 and fill in the observation lines.'
+    echo 'https://github.com/0x556c79/install_ugreen_leds_controller/issues/23'
+    if [ -f "$IDX_TEST_DIR/rollback.sh" ]; then
+        printf 'Backup: %s/backup\nRecovery command: sudo bash %q\n' "$IDX_TEST_DIR" "$IDX_TEST_DIR/rollback.sh"
+        echo 'No reboot is required for this test. TrueNAS Init/Shutdown entries were not changed.'
+    fi
+    exit "$status"
+}
+
+run_idx_test() {
+    local script
+    idx_test_find_persist_dir
+    SYSTEM_PRODUCT_NAME=$(read_system_product_name)
+    if [ "$IDX_TEST_MODE" = install ] && [ "$SYSTEM_PRODUCT_NAME" != iDX6011 ] && [ "$SYSTEM_PRODUCT_NAME" != 'iDX6011 Pro' ]; then
+        echo 'The installation test requires exact DMI iDX6011 or iDX6011 Pro; use collect for other DMI values.' >&2
+        return 1
+    fi
+    if [ "$DRY_RUN" = true ]; then
+        printf 'DRY RUN: would run iDX stage %s using %s; no report, backup or system changes made.\n' "$IDX_TEST_MODE" "$PERSIST_DIR"
+        return 0
+    fi
+    umask 077
+    IDX_TEST_DIR=$(mktemp -d "$(dirname "$PERSIST_DIR")/ugreen-idx-test-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
+    IDX_TEST_RESULT='FAILED'
+    trap 'idx_test_finish "$?"' EXIT
+    idx_test_capture > "$IDX_TEST_DIR/before.txt" 2>&1
+    if [ "$IDX_TEST_MODE" = collect ]; then
+        IDX_TEST_RESULT='INFORMATION COLLECTED; INSTALLATION NOT TESTED'
+        return 0
+    fi
+    # Backup must succeed before config, cache, modules or services are changed.
+    idx_test_backup > "$IDX_TEST_DIR/install.log" 2>&1
+    script=$(readlink -f "$0")
+    idx_test_prepare_install >> "$IDX_TEST_DIR/install.log" 2>&1
+    echo 'Backup saved. Installing the upstream beta; please wait...'
+    if bash "$script" --controller-source idx6011 --persist-dir "$PERSIST_DIR" --yes >> "$IDX_TEST_DIR/install.log" 2>&1; then
+        idx_test_load_cached_module >> "$IDX_TEST_DIR/install.log" 2>&1
+        # Give short-lived monitor startup failures time to surface.
+        sleep 2
+        if idx_test_verify >> "$IDX_TEST_DIR/install.log" 2>&1; then
+            IDX_TEST_RESULT='TECHNICAL PASS'
+        else
+            return 1
+        fi
+    else
+        return 1
+    fi
+}
+
+if [ -n "$IDX_TEST_MODE" ]; then
+    run_idx_test
+    exit 0
+fi
 
 select_controller_profile
 

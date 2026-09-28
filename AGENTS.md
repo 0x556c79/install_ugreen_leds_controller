@@ -49,6 +49,7 @@ sudo bash install_ugreen_leds_controller.sh -h            # help
 | `--use-current-dir` | Use `$CWD/leds_controller/` for storage |
 | `--pool-path <path>` | ZFS pool path under `/mnt/` |
 | `--controller-source <auto\|upstream\|idx6011>` | Exact Pro auto-selection, stable override, or manual upstream beta |
+| `--idx-test <collect\|install>` | Collect hardware feedback or run a backed-up beta installation test |
 | `--uninstall` | Full uninstall (services, modules, files) |
 | `--dry-run` | Preview all actions without executing |
 | `--yes` | Non-interactive mode (skips all prompts) |
@@ -66,6 +67,7 @@ The script is a single file (~1,960 lines) organized into named functions:
 | `help()` | Prints usage |
 | `fetch_truenas_versions()` | GitHub API discovery of supported versions (with hardcoded fallback) |
 | `find_codename_for_version()` | Maps TrueNAS version → build codename |
+| `run_idx_test()` | Runs collection or a backed-up beta test with a feedback report and recovery script |
 | `select_controller_profile()` | Selects stable master or the pinned upstream beta from CLI and exact DMI |
 | `resolve_module_url()` | Resolves stable fallbacks or requires an exact tagged beta artifact |
 | `determine_persistent_directory()` | 6-priority logic for selecting ZFS storage location |

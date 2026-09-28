@@ -71,24 +71,35 @@ It does not rename LEDs, change HCTL/serial mappings, or apply the non-Pro
 ordering to Pro hardware. The old `network_stat2` disk-bay workaround must
 be removed from the beta test's Post Init command.
 
-Existing configuration is preserved. A legacy custom override such as
-`NETDEV_LED_NAMES="network_stat"` must be cleared for the first beta test
-**after backing it up**. The monitor translates the previously documented
-pair `network_stat network_stat2` only when both new `netdev` paths exist;
-other custom overrides are not silently rewritten. Set explicit NIC/LED
-pairs only after identifying their physical locations.
+Use the [two-stage tester guide](docs/idx6011-hardware-test.md):
+
+1. `--idx-test collect` writes a hardware report without changing the LED installation.
+2. `--idx-test install` backs up installer-owned files and configuration, installs
+   a fresh beta, checks the module and services, and writes a feedback report.
+
+The test mode discovers the existing persistent directory from the installed
+service. Use `--persist-dir` if it cannot locate the installation. Collection
+also works before installation and saves its report under `/tmp` in that case.
+The installation stage is limited to exact DMI `iDX6011` and `iDX6011 Pro`.
+
+During the installation test, legacy network LED/interface overrides are cleared
+from the backed-up test configuration; unrelated options are preserved. The
+non-Pro test uses ATA mapping. Both script and module sources are refreshed.
+The test explicitly loads the cached beta image before checking its parameters
+and services, so a cache marker alone cannot produce a success result.
+
+The console prints success or failure, the `feedback.md` path, and a recovery
+command. The tester adds the commercial model and observed power, disk and LAN
+LED behavior to the report and posts it in issue #23. Physical LED mapping is
+not verified automatically. The automatic recovery script restores the saved
+files, module and service states without rerunning the old installer.
 
 > [!WARNING]
-> This is a hardware-test candidate. The old fork report does not validate
-> upstream beta. Keep PR #28 in draft and retain the fallback workflow,
-> build scripts and `idx6011-kmods` branch until model-specific physical LED,
-> disk activity, network and reboot acceptance pass.
-
-Use the [copy/paste hardware-test and rollback procedure](docs/idx6011-hardware-test.md).
-It covers backup, explicit beta selection, a verified old-module unload,
-loaded parameters, individual LED identification, separate ATA and NIC tests,
-and reboot persistence. `.module-source` identifies the cached artifact;
-it does not by itself prove which binary is currently loaded.
+> This is a current-boot hardware test. It does not reboot or edit TrueNAS
+> Init/Shutdown entries; an existing entry can reapply an older profile or
+> workaround at the next boot. Keep PR #28 in draft and retain the fallback
+> workflow, build scripts and `idx6011-kmods` branch until the separate hardware
+> and reboot acceptance gates pass.
 
 ## TrueNAS Scale Read-Only Filesystem Support
 

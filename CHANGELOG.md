@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Two-stage `--idx-test collect|install` workflow: automatic hardware report,
+  mandatory configuration/file backup before changes, fresh beta installation,
+  explicit cached-module loading, service checks and a shareable `feedback.md`.
+- A per-test recovery script restores the previous installer-owned files,
+  module parameters and service states; early failures also produce a report.
+- Reduced the tester guide to collection, installation and visual feedback.
+
+
 ### Changed
 
 #### Hardware-gated upstream iDX6011 Pro beta migration ([#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23))

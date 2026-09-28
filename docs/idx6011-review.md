@@ -65,9 +65,10 @@ module source revision; the explicit checkout is the relevant provenance.
   deletes a clone on cleanup. Other writes remain behind dry-run checks.
 - Exact-model ATA correction is applied to both installed script copies.
 - Old-cache source changes force an exact beta download. The probe fallback
-  preserves upstream module arguments. The hardware procedure additionally
-  requires a successful unload before migration; a cache marker alone cannot
-  identify the loaded binary.
+  preserves upstream module arguments. The automated installation test also
+  stops monitors, unloads the old module, loads the validated cache directly
+  with the upstream model parameters, and checks module identity and services.
+  A cache marker alone cannot identify the loaded binary.
 - README and the [hardware procedure](idx6011-hardware-test.md) separate
   module identity, parameters, physical LED IDs, SATA bays, NIC assignment,
   and reboot behavior. The old fork workaround is excluded from the beta test.
@@ -78,12 +79,17 @@ install/uninstall paths for both profiles with existing/missing storage and
 config variants, exact model/profile selection, generated probe arguments,
 module validation, source migration, and absence of beta version fallback.
 The original installer fails the dry-run regression; the corrected one passes.
-These checks do not exercise actual kernel loading, I2C hardware or TrueNAS UI.
+Additional test-mode regressions cover backup, recovery, report generation,
+failures and actual-image loading through isolated stubs. These checks do not
+exercise actual kernel loading, I2C hardware or TrueNAS UI.
 
 ## Test and merge decision
 
-Ready for the controlled **exact iDX6011** hardware procedure after these
-changes are available on the test branch. This is permission to collect the
+The two-stage `--idx-test collect|install` procedure is for controlled testing
+of exact `iDX6011` and `iDX6011 Pro`. Collection writes only reports; installation
+backs up the previous files/configuration, installs and checks the beta, and
+prints the feedback and recovery paths. The test leaves TrueNAS startup entries
+unchanged and covers the current boot; reboot acceptance remains separate. This is permission to collect the
 missing evidence, not a support or release claim. Physical LED layout, all
 populated bays, empty-bay behavior, connected NICs and reboot persistence
 remain hardware gates. Missing equipment leaves the corresponding gate open.
