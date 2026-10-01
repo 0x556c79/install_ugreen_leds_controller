@@ -299,9 +299,9 @@ Use at your own risk. The author is not responsible for any damage caused by run
 
 <a href="https://star-history.dera.page/0x556c79/install_ugreen_leds_controller">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=0x556c79/install_ugreen_leds_controller&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=0x556c79/install_ugreen_leds_controller" />
-   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=0x556c79/install_ugreen_leds_controller" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=0x556c79/install_ugreen_leds_controller&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=0x556c79/install_ugreen_leds_controller&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=0x556c79/install_ugreen_leds_controller&type=date&legend=top-left" />
  </picture>
 </a>
 
