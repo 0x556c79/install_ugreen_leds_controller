@@ -1,0 +1,121 @@
+#!/usr/bin/bash
+
+set -e
+
+SMBUS_BLOCK_WRITE_PROTOCOL_MODELS=(
+    "DXP4800 GT"
+    "iDX6011"
+    "iDX6011 Pro"
+    "iDX6012"
+)
+
+uses_smbus_block_write_protocol() {
+    local model="$1"
+    local candidate
+
+    for candidate in "${SMBUS_BLOCK_WRITE_PROTOCOL_MODELS[@]}"; do
+        if [ "$model" = "$candidate" ]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+append_model_led_layout_options() {
+    local model="$1"
+
+    case "$model" in
+        "iDX6011 Pro")
+            modprobe_args+=(num_netdev_leds=2 num_disk_leds=6)
+            ;;
+    esac
+}
+
+led_ugreen_loaded() {
+    lsmod | grep -q "^led_ugreen[[:space:]]"
+}
+
+find_i2c_dev() {
+    local i2c_dev
+    local bus
+    local chip_id
+
+    i2c_dev=$(i2cdetect -l | grep "SMBus I801 adapter" | grep -Po "i2c-\d+" | head -n1)
+    if [ -n "$i2c_dev" ]; then
+        echo "$i2c_dev"
+        return
+    fi
+
+    if ! uses_smbus_block_write_protocol "$model"; then
+        return
+    fi
+
+    while IFS= read -r i2c_dev; do
+        bus=${i2c_dev#i2c-}
+        if [ -d "/sys/bus/i2c/devices/$i2c_dev/${bus}-003a" ]; then
+            echo "$i2c_dev"
+            return
+        fi
+
+        chip_id=$(i2cget -y "$bus" 0x3a 0x5a w 2>/dev/null || true)
+        if [ "$chip_id" = "0xc5b2" ]; then
+            echo "$i2c_dev"
+            return
+        fi
+    done < <(i2cdetect -l | grep "Synopsys DesignWare I2C adapter" | grep -Po "i2c-\d+")
+}
+
+# Load i2c-dev module
+{ lsmod | grep i2c_dev ; } || modprobe -v i2c-dev
+
+model=$(dmidecode -s system-product-name 2>/dev/null || true)
+modprobe_args=(led-ugreen)
+
+if uses_smbus_block_write_protocol "$model"; then
+    modprobe_args+=(write_protocol=smbus-block)
+fi
+append_model_led_layout_options "$model"
+
+# Load led-ugreen module
+if ! led_ugreen_loaded; then
+    if modprobe -v "${modprobe_args[@]}" 2>/dev/null; then
+        echo "led-ugreen module loaded successfully"
+    else
+        # modprobe failed — attempt DKMS build as fallback
+        echo "led-ugreen module not found, attempting DKMS build..."
+        KERNEL_VERSION=$(uname -r)
+        DKMS_VERSION=$(dkms status led-ugreen 2>/dev/null | grep -oP 'led-ugreen/\K[^,]+' | head -n1 || true)
+
+        if [ -n "$DKMS_VERSION" ]; then
+            echo "Building led-ugreen/${DKMS_VERSION} for kernel ${KERNEL_VERSION}..."
+            dkms install "led-ugreen/${DKMS_VERSION}" -k "${KERNEL_VERSION}" || {
+                echo "ERROR: Failed to build DKMS module for current kernel"
+                echo "Please install kernel headers: apt install linux-headers-${KERNEL_VERSION}"
+                exit 1
+            }
+            echo "DKMS module built successfully"
+            modprobe -v "${modprobe_args[@]}"
+        else
+            echo "ERROR: led-ugreen module could not be loaded"
+            echo "Install via DKMS: dkms install led-ugreen"
+            echo "Or load manually: insmod /path/to/led-ugreen.ko"
+            exit 1
+        fi
+    fi
+fi
+
+i2c_dev=$(find_i2c_dev || true)
+
+if [ -n "$i2c_dev" ]; then
+        echo "Found I2C device /dev/${i2c_dev}"
+        dev_path=/sys/bus/i2c/devices/$i2c_dev/${i2c_dev/i2c-/}-003a
+        if [ ! -d "$dev_path" ]; then
+            echo "led-ugreen 0x3a" > "/sys/bus/i2c/devices/${i2c_dev}/new_device"
+        elif [ "$(cat "$dev_path/name")" != "led-ugreen" ]; then
+            echo "ERROR: the device ${i2c_dev/i2c-/}-003a has been registered as $(cat "$dev_path/name")"
+            exit 1
+        fi
+else
+        echo "I2C device not found!"
+fi
