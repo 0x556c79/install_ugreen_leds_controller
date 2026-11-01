@@ -219,7 +219,6 @@ The installer creates the following structure:
 ```
 /mnt/<POOL>/<PATH>/leds_controller/
 ├── .installer-source                           # Helper-script source marker
-├── .module-fallback                            # Older module version in use (only while on a fallback)
 ├── .module-source                              # Kernel-module source marker
 ├── .version                                    # TrueNAS version tracker
 ├── led-ugreen.ko                               # Kernel module
@@ -303,10 +302,9 @@ In the persistent directory it deletes only the files the installer created. Any
 ### How It Works
 
 1. **First Run**: Downloads kernel module, clones the upstream scripts, installs them, copies installer
-2. **Subsequent Runs**: Checks version tracker, reuses existing files if version matches; no network needed
+2. **Subsequent Runs**: Checks version tracker, reuses existing files if version matches; a normal boot makes no network calls
 3. **Version Change**: Automatically downloads new kernel module and refreshes the upstream scripts when TrueNAS updates
-4. **Fallback Module**: While on an older module (`.module-fallback`), each run checks once for the exact module and switches when it exists; without network it keeps the cached module
-5. **Read-Only Detection**: Automatically adapts to read-only `/usr` filesystem and restores it when finished
+4. **Read-Only Detection**: Automatically adapts to read-only `/usr` filesystem and restores it when finished
 
 GitHub is needed whenever the module is re-downloaded, plus on a source change, `--force` or a missing clone, not at every boot. A clone that fails while the installed scripts and services are in place only warns. If the driver cannot be loaded, the run puts the previous module and services back and fails with a non-zero exit code instead of reporting success.
 

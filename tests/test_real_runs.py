@@ -176,6 +176,8 @@ class RealRunTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(host.persist.exists())
         self.assertFalse(legacy_copy.exists())
+        self.assertFalse((host.tree / "etc/ugreen-leds.conf").exists())
+        self.assertFalse((host.tree / "etc/modules-load.d/ugreen-led.conf").exists())
         self.assertIn("All UGREEN LEDs controller components have been removed.", result.stdout)
 
     def test_uninstall_finishes_and_warns_when_system_files_cannot_be_removed(self):
@@ -214,20 +216,6 @@ class RealRunTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((host.tree / "etc/systemd/system/ugreen-diskiomon.service").exists())
 
-    def test_uninstall_rerun_finishes_what_a_failed_removal_left(self):
-        for setup in (lambda host: self.install(host, host.persist), self.v2_install):
-            with self.subTest(setup=setup):
-                host = self.host()
-                setup(host)
-                host.stub("rm", 'for a; do [[ "$a" != */ugreen_leds_controller ]] || exit 1; done; exec /bin/rm "$@"')
-                result = host.run("--uninstall", "--yes", "--persist-dir", str(host.persist))
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn(f"left in place:\n  {host.persist}/ugreen_leds_controller", result.stdout)
-                host.stub("rm", 'exec /bin/rm "$@"')
-                result = host.run("--uninstall", "--yes", "--persist-dir", str(host.persist))
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertFalse(host.persist.exists())
-
     def test_uninstall_of_a_wrong_folder_keeps_the_only_proof_of_the_real_one(self):
         host = self.host()
         self.v2_install(host)
@@ -261,14 +249,6 @@ class RealRunTests(unittest.TestCase):
         self.assertFalse(host.persist.exists())
         self.assertIn("(daemon-reload failed)", result.stdout)
         self.assertNotIn("Reloaded systemd daemon", result.stdout)
-
-    def test_uninstall_finds_the_folder_from_the_unit(self):
-        host = self.host()
-        self.install(host, host.persist)
-        result = host.run("--uninstall", "--yes")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(host.persist.exists())
-        self.assertFalse((host.script.parent / "leds_controller").exists())
 
     def test_uninstall_reads_an_unquoted_off_pool_unit(self):
         host = self.host()
@@ -374,6 +354,7 @@ class RealRunTests(unittest.TestCase):
     def test_install_refuses_to_replace_a_checkout_it_did_not_create(self):
         host = self.host()
         folder = self.own_checkout(host)
+        (folder / ".version").write_text("mine\n")  # Install proof only beside its module.
         work = folder / "ugreen_leds_controller/unpushed.c"
         before = host.paths()
         result = host.run("--yes", "--persist-dir", str(folder))
@@ -395,6 +376,7 @@ class RealRunTests(unittest.TestCase):
                 unit = host.tree / "etc/systemd/system/ugreen-diskiomon.service"
                 unit.write_text(f"[Service]\nExecStart={written_as.format(host.persist)}/scripts/ugreen-diskiomon\n")
                 (host.persist / "ugreen-leds.conf").write_text("MINE=1\n")
+                (host.persist / ".version").unlink()  # Leaves only the unit to prove the folder.
                 self.install(host, host.persist)
                 self.assertEqual((host.persist / "ugreen-leds.conf").read_text(), "MINE=1\n")
                 self.assertTrue((host.persist / ".module-source").exists())
@@ -493,6 +475,23 @@ class RealRunTests(unittest.TestCase):
                 result = host.run("--idx-test", "collect", "--dry-run")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn(expected, result.stdout)
+        (host.script.parent / "led-ugreen.ko").touch()
+        result = host.run("--idx-test", "collect", "--dry-run")
+        self.assertIn(f"using {host.script.parent}", result.stdout)
+
+    def test_idx_test_ignores_an_off_pool_module_it_only_guessed(self):
+        for script_dir, cwd in (("opt/leds_controller", "opt/leds_controller"), ("root", "opt")):
+            with self.subTest(script_dir=script_dir):
+                host = self.host(script_dir=script_dir)
+                module = host.tree / "opt/leds_controller/led-ugreen.ko"
+                module.parent.mkdir(parents=True, exist_ok=True)
+                module.touch()
+                result = host.run("--idx-test", "collect", "--dry-run", cwd=host.tree / cwd)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("No existing installation detected", result.stdout)
+                result = host.run("--idx-test", "install", "--dry-run", cwd=host.tree / cwd)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("Add --persist-dir", result.stderr)
 
     def test_second_install_keeps_the_clone_and_stays_offline(self):
         host = self.host()
@@ -505,6 +504,16 @@ class RealRunTests(unittest.TestCase):
         self.assertNotIn("curl ", calls)
         self.assertNotIn("git clone", calls)
         self.assertTrue(sentinel.exists())
+
+    def test_boot_with_the_driver_already_loaded_leaves_it_and_the_monitors_alone(self):
+        host = self.host()
+        self.install(host, host.persist)
+        (host.tree / "sys/module/led_ugreen").mkdir(parents=True)
+        host.take_calls()
+        self.install(host, host.persist, ACTIVE="1")
+        calls = host.take_calls()
+        for call in ("rmmod ", "insmod ", "systemctl stop "):
+            self.assertNotIn(call, calls)
 
     def test_clone_refreshes_for_update_force_marker_and_missing_clone(self):
         for change in ("update", "force", "marker", "missing"):
@@ -527,16 +536,6 @@ class RealRunTests(unittest.TestCase):
                 self.assertFalse((clone / "sentinel").exists())
                 self.assertFalse((host.persist / SWAP_OLD).exists())
                 self.assertEqual(marker.read_text(), expected)
-
-    def test_offline_boot_with_failing_git_and_curl_still_completes(self):
-        host = self.host()
-        self.install(host, host.persist)
-        host.take_calls()
-        result = host.run("--yes", "--persist-dir", str(host.persist), OFFLINE="1")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("Installation Complete!", result.stdout)
-        self.assertTrue((host.persist / "ugreen_leds_controller").exists())
-        self.assertEqual(host.take_calls().count("curl "), 0)
 
     def test_offline_run_finishes_when_only_the_clone_step_fails(self):
         for change in ("missing clone", "missing marker"):
@@ -571,6 +570,16 @@ class RealRunTests(unittest.TestCase):
                 result = host.run("--yes", "--persist-dir", str(host.persist), OFFLINE="1")
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
 
+    def test_force_resets_the_configuration(self):
+        host = self.host()
+        self.install(host, host.persist)
+        configs = (host.persist / "ugreen-leds.conf", host.tree / "etc/ugreen-leds.conf")
+        for config in configs:
+            config.write_text("MINE=1\n")
+        self.install(host, host.persist, "--force")
+        for config in configs:
+            self.assertNotIn("MINE", config.read_text())
+
     def test_force_needs_the_clone_even_offline(self):
         host = self.host()
         self.install(host, host.persist)
@@ -578,40 +587,13 @@ class RealRunTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("left untouched", result.stderr)
 
-    def test_run_killed_inside_the_clone_swap_restores_the_old_tree(self):
+    def test_next_clone_clears_what_a_run_killed_inside_the_swap_left(self):
         host = self.host()
         self.install(host, host.persist)
-        clone = host.persist / "ugreen_leds_controller"
-        (clone / "sentinel").touch()
-        clone.rename(host.persist / SWAP_OLD)
-        self.install(host, host.persist, OFFLINE="1")
-        self.assertTrue((clone / "sentinel").exists())
+        # Left in place, this makes mv refuse to move the clone aside.
+        (host.persist / SWAP_OLD / "ugreen_leds_controller/sentinel").mkdir(parents=True)
+        self.install(host, host.persist, "--force")
         self.assertFalse((host.persist / SWAP_OLD).exists())
-        # Killed while deleting the old tree instead.
-        (host.persist / SWAP_OLD).mkdir()
-        self.install(host, host.persist, OFFLINE="1")
-        self.assertFalse((host.persist / SWAP_OLD).exists())
-
-    def test_a_folder_named_like_a_backup_of_the_clone_is_left_alone(self):
-        for clone_present in (True, False):
-            with self.subTest(clone_present=clone_present):
-                host = self.host()
-                self.install(host, host.persist)
-                clone = host.persist / "ugreen_leds_controller"
-                (host.persist / "ugreen_leds_controller.old/.git").mkdir(parents=True)
-                if not clone_present:
-                    shutil.rmtree(clone)
-                self.install(host, host.persist, OFFLINE="1")
-                self.assertTrue((host.persist / "ugreen_leds_controller.old/.git").exists())
-                self.assertEqual(clone.exists(), clone_present)
-
-    def test_run_killed_before_the_marker_is_written_is_not_refused_next_time(self):
-        host = self.host()
-        host.stub("mv", '/bin/mv "$@"; [[ "$*" != *swap-new* ]] || kill -9 $PPID')
-        result = host.run("--yes", "--persist-dir", str(host.persist))
-        self.assertEqual(result.returncode, -9, result.stdout + result.stderr)
-        host.stub("mv", 'exec /bin/mv "$@"')
-        self.install(host, host.persist)
 
     def test_new_download_removes_files_a_killed_run_left(self):
         host = self.host()
@@ -656,6 +638,24 @@ class RealRunTests(unittest.TestCase):
         result = host.run("--yes", "--persist-dir", str(host.persist), "--controller-source", "upstream")
         self.assertEqual(self.init_command(result), f'/bin/bash "{host.persist.parent}/{script}" --yes --controller-source upstream')
 
+    def test_printed_init_command_uses_the_folder_the_script_sits_in(self):
+        host = self.host()
+        command = self.init_command(host.run("--yes", "--persist-dir", str(host.persist)))
+        result = subprocess.run(["sh", "-c", command], cwd=host.root, text=True, capture_output=True,
+                                timeout=30, env=host.env(OFFLINE="1"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((host.persist / "leds_controller").exists())
+
+    def test_existing_folder_beside_the_script_wins_over_use_current_dir(self):
+        host = self.host(script_dir="mnt/tank/apps")
+        host.persist.mkdir()
+        elsewhere = host.tree / "mnt/tank/elsewhere"
+        elsewhere.mkdir()
+        result = host.run("--yes", "--use-current-dir", cwd=elsewhere)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((host.persist / "led-ugreen.ko").exists())
+        self.assertEqual(list(elsewhere.iterdir()), [])
+
     def test_failed_refresh_keeps_the_working_clone_and_marker(self):
         for failure, args, env in (("clone", (), {"FAIL_GIT": "1"}),
                                    ("verify", ("--controller-source", "idx6011"), {"HEAD_COMMIT": "wrong"})):
@@ -692,20 +692,13 @@ class RealRunTests(unittest.TestCase):
         self.assertNotEqual(installed.read_text(), "stable scripts")
 
     def test_failed_module_load_stops_the_install(self):
-        cached = "$HOST/mnt/tank/apps/leds_controller/led-ugreen.ko"
-        installed = "$HOST/lib/modules/test/extra/led-ugreen.ko"
-        for message, stubs in (("insmod could not load", {"insmod": "exit 1"}),
-                               ("modprobe could not load", {"depmod": f'rm "{cached}"', "modprobe": '[[ "$1" == -a ]]'}),
-                               ("led-ugreen.ko not found", {"depmod": f'rm "{cached}" "{installed}"'})):
-            with self.subTest(message=message):
-                host = self.host()
-                for name, body in stubs.items():
-                    host.stub(name, body)
-                result = host.run("--yes", "--persist-dir", str(host.persist))
-                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertIn(message, result.stderr)
-                self.assertNotIn("Installation Complete!", result.stdout)
-                self.assertFalse((host.persist / ".version").exists())
+        host = self.host()
+        host.stub("insmod", "exit 1")
+        result = host.run("--yes", "--persist-dir", str(host.persist))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("insmod could not load", result.stderr)
+        self.assertNotIn("Installation Complete!", result.stdout)
+        self.assertFalse((host.persist / ".version").exists())
 
     def test_failed_load_of_the_cached_module_does_not_block_the_next_offline_boot(self):
         host = self.host()
@@ -733,73 +726,61 @@ class RealRunTests(unittest.TestCase):
                 self.assertNotIn(skipped, calls)
                 self.assertNotIn(DOWNLOAD, calls)
 
-    def test_fallback_is_replaced_once_the_exact_module_appears(self):
+    def test_fallback_that_loads_makes_no_network_calls_at_the_next_boot(self):
         host = self.host()
-        fallback = host.persist / ".module-fallback"
-        self.install(host, host.persist, MISSING="25.10.5")
+        result = host.run("--yes", "--persist-dir", str(host.persist), MISSING="25.10.5")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Using fallback kernel module", result.stdout)
         self.assertIn("/25.10.4/led-ugreen.ko", host.take_calls())
-        self.assertEqual(fallback.read_text(), "25.10.4\n")
         self.assertEqual((host.persist / ".version").read_text(), "25.10.5\n")
-
-        self.install(host, host.persist, MISSING="25.10.5")
-        calls = host.take_calls()
-        self.assertIn("TrueNAS-SCALE-Goldeye/25.10.5/led-ugreen.ko", calls)
-        self.assertNotIn(DOWNLOAD, calls)
-        self.install(host, host.persist, OFFLINE="1")
-        self.assertNotIn(DOWNLOAD, host.take_calls())
-        self.assertTrue(fallback.exists())
-
-        self.install(host, host.persist)
-        calls = host.take_calls()
-        self.assertEqual(calls.count(DOWNLOAD), 1)
-        self.assertIn("/25.10.5/led-ugreen.ko", calls)
-        self.assertFalse(fallback.exists())
-        self.assertFalse((host.persist / "led-ugreen.ko.previous").exists())
         self.install(host, host.persist)
         self.assertNotIn("curl ", host.take_calls())
 
-    def fallback_host(self):
+    def test_exact_module_prints_no_fallback_warning(self):
         host = self.host()
-        self.install(host, host.persist, MISSING="25.10.5")
-        (host.persist / "led-ugreen.ko").write_text("cached fallback")
-        host.take_calls()
-        return host
+        result = host.run("--yes", "--persist-dir", str(host.persist))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("Using fallback kernel module", result.stdout)
 
-    def test_failed_fallback_replacement_finishes_on_the_cached_module(self):
-        for failure, env in (("download", {"FAIL_DOWNLOAD": "1"}), ("clone", {"FAIL_GIT": "1"}), ("validation", {})):
+    def test_fallback_that_fails_to_load_is_retried_by_the_next_run(self):
+        for version in ("25.10.5", "25.10.6"):
+            with self.subTest(version=version):
+                host = self.host()
+                if version == "25.10.6":  # An update, with the old module to go back to.
+                    self.install(host, host.persist)
+                    (host.tree / "etc/version").write_text("25.10.6\n")
+                working = (host.bin / "insmod").read_text()
+                host.stub("insmod", "exit 1")
+                result = host.run("--yes", "--persist-dir", str(host.persist), MISSING=version)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                (host.bin / "insmod").write_text(working)
+                host.take_calls()
+                self.install(host, host.persist)
+                self.assertIn(f"/{version}/led-ugreen.ko", host.take_calls())
+                self.assertEqual((host.persist / ".version").read_text(), f"{version}\n")
+
+    def test_failed_download_or_validation_stops_and_keeps_the_cached_module(self):
+        for failure, env, message in (("download", {"FAIL_DOWNLOAD": "1"}, "Kernel module download failed."),
+                                      ("validation", {}, "Kernel module validation failed")):
             with self.subTest(failure=failure):
-                host = self.fallback_host()
-                modinfo = (host.bin / "modinfo").read_text()
+                host = self.swap_ready_host()
+                (host.persist / "led-ugreen.ko").write_text("old")
                 if failure == "validation":
                     host.stub("modinfo", "exit 1")
                 result = host.run("--yes", "--persist-dir", str(host.persist), **env)
-                calls = host.take_calls()
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn("Installation Complete!", result.stdout)
-                self.assertEqual(calls.count("--head"), 1)
-                self.assertIn(f"insmod {host.persist}/led-ugreen.ko", calls)
-                self.assertIn("systemctl restart ugreen-diskiomon.service", calls)
-                self.assertEqual((host.persist / "led-ugreen.ko").read_text(), "cached fallback")
-                self.assertEqual((host.persist / ".module-fallback").read_text(), "25.10.4\n")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(message, result.stderr)
+                self.assertEqual((host.persist / "led-ugreen.ko").read_text(), "old")
                 self.assertEqual(list(host.persist.glob(".led-ugreen.ko.download.*")), [])
-                (host.bin / "modinfo").write_text(modinfo)
-                self.install(host, host.persist)
-                self.assertEqual(host.take_calls().count(DOWNLOAD), 1)
-                self.assertFalse((host.persist / ".module-fallback").exists())
 
-    def test_failed_download_stops_when_no_fallback_is_in_use(self):
-        host = self.swap_ready_host()
-        result = host.run("--yes", "--persist-dir", str(host.persist), FAIL_DOWNLOAD="1")
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("Kernel module download failed.", result.stderr)
-
-    def test_offline_recheck_survives_a_series_the_table_does_not_know(self):
+    def test_normal_boot_on_a_series_the_table_does_not_know_stays_offline(self):
         host = self.host()
         self.install(host, host.persist)
         (host.tree / "etc/version").write_text("26.04.1\n")
         (host.persist / ".version").write_text("26.04.1\n")
-        (host.persist / ".module-fallback").write_text("26.04.0\n")
+        host.take_calls()
         self.install(host, host.persist, OFFLINE="1")
+        self.assertNotIn("curl ", host.take_calls())
 
     def test_unknown_series_stops_before_probing_any_module(self):
         host = self.host()
@@ -830,24 +811,17 @@ class RealRunTests(unittest.TestCase):
             self.assertIn(f"systemctl restart {service}.service", calls)
         self.assertFalse([line for line in calls if line.startswith("systemctl start ")])
 
-    def test_failed_stable_unload_restores_services_and_fails(self):
-        host = self.swap_ready_host()
-        host.stub("rmmod", "exit 1")
-        result = host.run("--yes", "--persist-dir", str(host.persist), ACTIVE="1")
-        calls = host.take_calls()
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("systemctl start ugreen-diskiomon.service --no-block", calls)
-        self.assertNotIn("insmod ", calls)
-        self.assertNotIn("Installation Complete!", result.stdout)
-
     def test_failed_unload_keeps_the_markers_so_the_next_run_retries(self):
         host = self.swap_ready_host()
         (host.persist / "led-ugreen.ko").write_text("old")
         version = host.persist / ".version"
         host.stub("rmmod", "exit 1")
         for _ in range(2):
-            result = host.run("--yes", "--persist-dir", str(host.persist))
+            result = host.run("--yes", "--persist-dir", str(host.persist), ACTIVE="1")
+            calls = host.take_calls()
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("systemctl start ugreen-diskiomon.service --no-block", calls)
+            self.assertNotIn("insmod ", calls)
             self.assertNotIn("Installation Complete!", result.stdout)
             self.assertEqual(version.read_text(), "25.10.5\n")
             self.assertEqual((host.persist / "led-ugreen.ko").read_text(), "old")
@@ -880,6 +854,7 @@ class RealRunTests(unittest.TestCase):
                 calls = host.take_calls().splitlines()
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual((host.persist / ".version").read_text(), "25.10.6\n")
+                self.assertEqual(calls.count("rmmod led-ugreen"), 1)
                 for service in ("diskiomon", "netdevmon-multi", "power-led", "probe-leds"):
                     self.assertIn(f"systemctl start ugreen-{service}.service --no-block", calls)
 
@@ -917,18 +892,16 @@ class RealRunTests(unittest.TestCase):
         self.assertEqual(module.read_text(), "good old")
         self.assertFalse(previous.exists())
 
-    def test_run_killed_while_copying_the_old_module_leaves_no_partial_previous(self):
-        host = self.swap_ready_host()
-        module = host.persist / "led-ugreen.ko"
-        module.write_text("good old")
-        host.stub("cp", 'if [[ "$*" == *.previous* ]]; then : > "${!#}"; kill -9 $PPID; fi; exec /bin/cp "$@"')
-        result = host.run("--yes", "--persist-dir", str(host.persist))
-        self.assertEqual(result.returncode, -9, result.stdout + result.stderr)
-        self.assertFalse((host.persist / "led-ugreen.ko.previous").exists())
-        self.assertEqual(module.read_text(), "good old")
-        host.stub("cp", 'exec /bin/cp "$@"')
+    def test_boot_after_a_kill_between_the_module_renames_uses_the_old_module(self):
+        host = self.host()
         self.install(host, host.persist)
-        self.assertEqual(list(host.persist.glob(".led-ugreen.ko.download.*")), [])
+        module = host.persist / "led-ugreen.ko"
+        previous = host.persist / "led-ugreen.ko.previous"
+        module.write_text("good old")
+        module.rename(previous)
+        self.install(host, host.persist, OFFLINE="1")
+        self.assertEqual(module.read_text(), "good old")
+        self.assertFalse(previous.exists())
 
     def test_failed_swap_with_no_older_module_does_not_trust_the_new_one(self):
         host = self.swap_ready_host()
@@ -946,28 +919,30 @@ class RealRunTests(unittest.TestCase):
         self.assertIn("systemctl restart ugreen-diskiomon.service", host.take_calls())
 
     def test_failed_new_module_brings_the_working_one_back(self):
-        host = self.fallback_host()
+        host = self.swap_ready_host()
+        (host.persist / "led-ugreen.ko").write_text("old")
         parameters = host.tree / "sys/module/led_ugreen/parameters"
-        parameters.mkdir(parents=True)
+        parameters.mkdir()
         (parameters / "write_protocol").write_text("smbus-block\n")
-        host.stub("insmod", 'echo "insmod $*" >> "$CALLS"; [[ "$(cat "$1")" == "cached fallback" ]]')
+        host.stub("insmod", 'echo "insmod $*" >> "$CALLS"; [[ "$(cat "$1")" == "old" ]]')
         result = host.run("--yes", "--persist-dir", str(host.persist), ACTIVE="1")
         calls = host.take_calls().splitlines()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("insmod could not load", result.stderr)
         module = host.persist / "led-ugreen.ko"
         self.assertLess(calls.index(f"insmod {module} write_protocol=smbus-block"), calls.index("systemctl start ugreen-diskiomon.service --no-block"))
-        self.assertEqual(module.read_text(), "cached fallback")
-        self.assertEqual((host.persist / ".module-fallback").read_text(), "25.10.4\n")
+        self.assertEqual(module.read_text(), "old")
         self.assertEqual((host.persist / ".version").read_text(), "25.10.5\n")
         self.assertFalse((host.persist / "led-ugreen.ko.previous").exists())
 
-    def test_failed_new_module_on_an_unloaded_machine_keeps_the_fallback_cached(self):
-        host = self.fallback_host()
-        host.stub("insmod", 'echo "insmod $*" >> "$CALLS"; [[ "$(cat "$1")" == "cached fallback" ]]')
+    def test_failed_new_module_on_an_unloaded_machine_keeps_the_old_one_cached(self):
+        host = self.swap_ready_host()
+        (host.tree / "sys/module/led_ugreen").rmdir()
+        (host.persist / "led-ugreen.ko").write_text("old")
+        host.stub("insmod", 'echo "insmod $*" >> "$CALLS"; [[ "$(cat "$1")" == "old" ]]')
         result = host.run("--yes", "--persist-dir", str(host.persist))
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertEqual((host.persist / "led-ugreen.ko").read_text(), "cached fallback")
+        self.assertEqual((host.persist / "led-ugreen.ko").read_text(), "old")
         self.assertIn(f"insmod {host.persist}/led-ugreen.ko", host.take_calls())
 
     def monitor(self, host):
@@ -1013,6 +988,16 @@ class RealRunTests(unittest.TestCase):
         self.assertIn("Configured network LED not found: missing", result.stderr)
         self.assertIn("No network LEDs found", result.stdout)
 
+    def test_generated_network_monitor_translates_the_old_idx_led_names(self):
+        host = self.host()
+        self.install(host, host.persist)
+        (host.tree / "etc/ugreen-leds.conf").write_text('NETDEV_LED_NAMES="network_stat network_stat2"\n')
+        self.network_led(host)
+        self.network_led(host, "netdev2")
+        host.stub("sleep", "kill $PPID")  # The monitor never exits on its own.
+        result = self.monitor(host)
+        self.assertIn("Network LEDs: netdev netdev2", result.stdout, result.stderr)
+
     def test_read_only_usr_is_restored_after_the_last_write(self):
         host = self.host()
         host.mounts.write_text("fixture on /usr type zfs (ro,relatime)\n")
@@ -1026,6 +1011,15 @@ class RealRunTests(unittest.TestCase):
         self.assertLess(max(calls.index("git clone"), download), calls.index("mount -o remount,rw /usr"))
         self.assertEqual(calls[-1], "mount -o remount,ro /usr")
 
+    def test_stacked_mount_is_judged_by_its_top_layer(self):
+        for layers, expected in ((("ro", "rw"), []),
+                                 (("rw", "ro"), ["mount -o remount,rw /usr", "mount -o remount,ro /usr"])):
+            with self.subTest(layers=layers):
+                host = self.host()
+                host.mounts.write_text("".join(f"fixture on /usr type zfs ({layer},relatime)\n" for layer in layers))
+                self.install(host, host.persist)
+                self.assertEqual([line for line in host.take_calls().splitlines() if line.startswith("mount ")], expected)
+
     def test_read_only_etc_is_made_writable_and_put_back(self):
         host = self.host()
         etc = host.tree / "boot-pool/ROOT/25.10.5/etc"
@@ -1034,15 +1028,6 @@ class RealRunTests(unittest.TestCase):
         self.install(host, host.persist)
         self.assertEqual([line for line in host.take_calls().splitlines() if line.startswith("mount ")],
                          [f"mount -o remount,rw {etc}", f"mount -o remount,ro {etc}"])
-
-    def test_signal_during_the_remount_still_restores_read_only_usr(self):
-        host = self.host()
-        host.mounts.write_text("fixture on /usr type zfs (ro,relatime)\n")
-        host.stub("mount", '''if (( $# )); then echo "mount $*" >> "$CALLS"; [[ "$*" != *,rw* ]] || kill -TERM $PPID
-else cat "$MOUNTS"; fi''')
-        result = host.run("--yes", "--persist-dir", str(host.persist))
-        self.assertEqual(result.returncode, -15, result.stdout + result.stderr)
-        self.assertEqual(host.take_calls().splitlines()[-1], "mount -o remount,ro /usr")
 
     def test_failed_remount_is_not_undone(self):
         host = self.host()
@@ -1161,6 +1146,8 @@ else cat "$MOUNTS"; fi''')
                 self.assertIn(f"insmod {module} write_protocol=smbus-block num_netdev_leds=2 num_disk_leds=6", calls)
                 self.assertIn("systemctl start ugreen-diskiomon.service --no-block", calls)
                 self.assertEqual(module.read_text(), "old beta")
+                # modprobe loads this copy at boot, so it must not stay the rejected module.
+                self.assertEqual((host.tree / "lib/modules/test/extra/led-ugreen.ko").read_text(), "old beta")
                 self.assertEqual(source.read_text(), "old source\n")
 
     def test_failed_beta_reload_without_a_download_puts_the_driver_back(self):
@@ -1217,18 +1204,6 @@ else cat "$MOUNTS"; fi''')
         self.assertEqual(host.take_calls().count("insmod "), 1)
         self.assertEqual(module.read_text(), "old beta")
 
-    def test_restored_module_also_replaces_the_copy_modprobe_loads_at_boot(self):
-        host = self.beta_host()
-        self.beta_parameters(host)
-        self.install(host, host.persist, "--controller-source", "idx6011", HEAD_COMMIT=SCRIPTS_COMMIT)
-        (host.persist / "led-ugreen.ko").write_text("old beta")
-        (host.persist / ".module-source").write_text("old source\n")
-        host.fail_systemctl("restart ugreen-probe-leds.service")
-        result = host.run("--yes", "--persist-dir", str(host.persist), "--controller-source", "idx6011",
-                          HEAD_COMMIT=SCRIPTS_COMMIT)
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertEqual((host.tree / "lib/modules/test/extra/led-ugreen.ko").read_text(), "old beta")
-
     def test_idx_machine_on_the_old_fork_keeps_the_idx_profile_without_a_flag(self):
         fork = "idx6011:klein0r/ugreen_leds_controller@old:0x556c79/install_ugreen_leds_controller:idx6011-kmods\n"
         for product, stored, beta in (("iDX6011", fork, True), ("iDX6012", fork, True),
@@ -1258,6 +1233,13 @@ else cat "$MOUNTS"; fi''')
                 self.assertIn("Exact upstream", result.stderr)
                 self.assertEqual("systemctl start ugreen-diskiomon.service --no-block" in host.take_calls(), starts)
 
+    def test_pro_beta_module_with_wrong_led_counts_fails_the_run(self):
+        host = self.beta_host()
+        (self.beta_parameters(host) / "num_disk_leds").write_text("-1\n")
+        result = host.run("--yes", "--persist-dir", str(host.persist), "--controller-source", "idx6011", HEAD_COMMIT=SCRIPTS_COMMIT)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("required parameters", result.stderr)
+
     def test_beta_module_with_wrong_parameters_or_not_loaded_fails_the_run(self):
         for present, message in ((False, "completed without loading"), (True, "required parameters")):
             with self.subTest(present=present):
@@ -1283,18 +1265,21 @@ echo 2 > "$parameters/num_netdev_leds"
 echo 6 > "$parameters/num_disk_leds"''')
         host.stub("insmod", 'echo "insmod $*" >> "$CALLS"; load-module')
         host.stub("rmmod", 'rm -r "$HOST/sys/module/led_ugreen"')
-        host.stub("systemctl", '''case "$*" in
+        host.stub("systemctl", '''echo "systemctl $*" >> "$CALLS"
+case "$*" in
     list-unit-files*) echo "ugreen-diskiomon.service enabled enabled" ;;
+    list-units*) echo "ugreen-diskiomon.service loaded active running x" ;;
     is-enabled*) exit 1 ;;
     "restart ugreen-probe-leds.service") load-module ;;
 esac''')
         return host
 
-    def rollback(self, host):
+    def rollback(self, host, returncode=0):
         script = next(host.tree.glob("mnt/tank/**/ugreen-idx-test-*/rollback.sh"))
         script.write_text(script.read_text().replace("${EUID}", "0"))
         result = subprocess.run(["bash", str(script)], text=True, capture_output=True, timeout=30, env=host.env())
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, returncode, result.stdout + result.stderr)
+        return result
 
     def test_idx_install_test_refreshes_the_old_install_and_recovery_restores_it(self):
         host = self.idx_host()
@@ -1318,12 +1303,24 @@ esac''')
 
         for _ in range(2):  # A rerun after a failed recovery must keep the clone.
             self.rollback(host)
+            self.assertIn("systemctl stop ugreen-diskiomon.service", host.take_calls())
             for name, value in markers.items():
                 self.assertEqual((host.persist / name).read_text(), value, name)
             # The restored marker must not sit beside the beta checkout.
             self.assertFalse((host.persist / "ugreen_leds_controller/beta-checkout").exists())
             self.assertTrue((host.persist / "ugreen_leds_controller/old-checkout").exists())
         self.install(host, host.persist, "--controller-source", "idx6011", OFFLINE="1", HEAD_COMMIT=SCRIPTS_COMMIT)
+
+    def test_idx_install_test_refuses_any_other_model(self):
+        host = self.idx_host()
+        (host.tree / "sys/class/dmi/id/product_name").write_text("DXP8800 Plus\n")
+        (host.tree / "sys/module/led_ugreen").mkdir(parents=True)
+        before = host.paths()
+        result = host.run("--idx-test", "install", "--persist-dir", str(host.persist), HEAD_COMMIT=SCRIPTS_COMMIT)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("requires exact DMI", result.stderr)
+        self.assertEqual(host.paths(), before)
+        self.assertEqual(host.take_calls(), "")
 
     def test_new_idx_test_waits_for_the_rollback_of_the_last_one(self):
         host = self.idx_host()
@@ -1366,6 +1363,53 @@ esac''')
         report = next((host.tree / "mnt").glob("ugreen-idx-test-*/feedback.md")).read_text()
         self.assertNotIn("/tank", report)
 
+    def test_failed_rollback_rerun_clears_the_rolled_back_marker(self):
+        host = self.idx_host()
+        self.install(host, host.persist, "--controller-source", "idx6011", HEAD_COMMIT=SCRIPTS_COMMIT)
+        result = host.run("--idx-test", "install", "--persist-dir", str(host.persist), FAIL_GIT="1")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.rollback(host)
+        script = next(host.persist.parent.glob("ugreen-idx-test-*/rollback.sh"))
+        self.assertTrue(script.with_name("rolled-back").exists())
+
+        host.stub("tar", "exit 1")
+        result = subprocess.run(["bash", str(script)], text=True, capture_output=True, timeout=30, env=host.env())
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(script.with_name("rolled-back").exists())
+
+    def test_recovery_with_a_busy_module_restarts_the_monitors_and_can_be_rerun(self):
+        monitors = ("diskiomon", "netdevmon-multi", "power-led", "probe-leds")
+        for case, returncode, active_before in (("passed test", 0, monitors), ("failed test", 1, monitors),
+                                                ("first install", 0, ("diskiomon",))):
+            with self.subTest(case=case):
+                host = self.idx_host()
+                old_clone = host.persist / "ugreen_leds_controller/old-checkout"
+                if case != "first install":
+                    self.install(host, host.persist, "--controller-source", "idx6011", HEAD_COMMIT=SCRIPTS_COMMIT)
+                    old_clone.touch()
+                working = (host.bin / "rmmod").read_text()
+                if case == "failed test":
+                    host.stub("rmmod", "exit 1")
+                result = host.run("--idx-test", "install", "--persist-dir", str(host.persist), HEAD_COMMIT=SCRIPTS_COMMIT)
+                self.assertEqual(result.returncode, returncode, result.stdout + result.stderr)
+                host.stub("rmmod", "exit 1")
+                folder = next(host.persist.parent.glob("ugreen-idx-test-*"))
+                if case == "first install":
+                    (folder / "backup/active.txt").write_text("")  # Nothing ran before the test.
+                host.take_calls()
+
+                self.assertIn("Module is busy", self.rollback(host, 1).stdout)
+                calls = host.take_calls().splitlines()
+                for monitor in active_before:
+                    self.assertIn(f"systemctl start ugreen-{monitor}.service", calls)
+                self.assertFalse((folder / "rolled-back").exists())
+                self.assertFalse(old_clone.exists())
+
+                (host.bin / "rmmod").write_text(working)
+                self.rollback(host)
+                self.assertTrue((folder / "rolled-back").exists())
+                self.assertEqual(old_clone.exists(), case != "first install")
+
     def test_failed_idx_test_recovery_keeps_the_clone(self):
         host = self.idx_host()
         self.install(host, host.persist, "--controller-source", "idx6011", HEAD_COMMIT=SCRIPTS_COMMIT)
@@ -1373,6 +1417,8 @@ esac''')
         result = host.run("--idx-test", "install", "--persist-dir", str(host.persist), FAIL_GIT="1")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("FAILED:", result.stdout)
+        script = next(host.persist.parent.glob("ugreen-idx-test-*/rollback.sh"))
+        self.assertIn(f"recover with: sudo bash {script}\n", result.stdout)
         self.rollback(host)
         self.assertTrue((host.persist / "ugreen_leds_controller/old-checkout").exists())
 

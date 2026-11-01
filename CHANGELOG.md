@@ -21,7 +21,8 @@ Check these before upgrading; details are under Fixed and Removed.
   folder with no install marker and no installed service pointing at it, unless
   `--force` is given.
 - `ugreen-power-led.service` is always enabled and restarted, whatever
-  `BLINK_TYPE_POWER` says.
+  `BLINK_TYPE_POWER` says: it also applies color and brightness, and the old
+  check never matched upstream's `"none"`.
 - Upstream helper scripts no longer refresh at every boot, only when the module
   is re-downloaded, or on a source change, `--force` or a missing clone.
 - A driver that fails to load now exits non-zero instead of printing
@@ -94,22 +95,17 @@ candidate passes iDX6011 Pro hardware and reboot acceptance.
 
 ### Fixed
 
-- Normal boots no longer need GitHub: the clone stays in the persistent folder
+- A normal boot makes no network calls: the clone stays in the persistent folder
   and is refreshed only when the module is re-downloaded, or on a source change,
-  `--force`, a missing clone or a changed marker. A new clone is verified in a
-  hidden `.ugreen_leds_controller.swap-new` folder and swapped in with two
-  renames through `.ugreen_leds_controller.swap-old`, so a failed refresh keeps
-  the working clone, a killed run never loses it, and a folder of your own such
-  as `ugreen_leds_controller.old` stays alone. A failed clone only warns when
-  the installed scripts and services are in place, and those stay in use even
-  when an earlier failed run left a clone of another source. The beta test saves
-  the old clone before it writes the recovery script, so recovery always puts it
-  back.
+  `--force`, a missing clone or a changed marker. A failed refresh keeps the
+  working clone, and only warns when the installed scripts and services are in
+  place. The beta test saves the old clone before it writes the recovery script,
+  so recovery always puts it back.
 - Module downloads work again on a real host: `modinfo` rejects a temp file whose
   name does not end in `.ko`, so every download failed validation. Partial
   downloads from a killed run are removed by the next download.
-- A failed `insmod` or `modprobe led-ugreen`, a failed beta probe, or a missing
-  module file now fails the run instead of printing `Installation Complete!`.
+- A failed `insmod` or beta probe now fails the run instead of printing
+  `Installation Complete!`.
   The next run downloads a new module that failed this way again; a cached module
   stays trusted, so one failed load does not stop the next offline boot.
 - Replacing a loaded stable driver now stops the LED services first and fails
@@ -126,21 +122,14 @@ candidate passes iDX6011 Pro hardware and reboot acceptance.
   by the next download before.
 - A network error while probing modules now stops the run. Only a real 404
   selects an older module.
-- A machine on a fallback module records it in `.module-fallback`, keeps it
-  without downloading at every boot, and switches once the exact module exists.
-  Boots with no network keep working on the cached fallback, and a failed
-  download, validation or clone of the exact module keeps it too.
-- `--uninstall` no longer deletes the whole persistent directory: it removes
-  only installer-owned files and keeps a folder that holds anything else.
 - `--uninstall` remounts `/usr` and `/etc` first, finishes the remaining
   cleanup when a removal fails, and reports what was left, including a driver
   that stays loaded, instead of claiming success. The exit code stays 0. On
   closed stdin its confirmation counts as a no. A failed `daemon-reload` only
-  warns, and the ownership markers go last, so a rerun can remove what is left.
-  An install from before the markers gets one first, so that rerun works there
-  too.
-- A signal while the run remounts `/usr`, restarts the monitors or cleans up
-  no longer leaves `/usr` writable or the monitors stopped.
+  warns. A file it could not remove from storage is yours to delete: the install
+  markers may be gone by then, so a rerun can leave that folder alone.
+- A signal while the run restarts the monitors or cleans up no longer leaves
+  `/usr` writable or the monitors stopped.
 - `--uninstall` finds the storage folder from the installed service, never
   creates a folder and never asks where to store files.
 - The `/mnt/` rule now applies to the storage folder, not the script location:
@@ -173,18 +162,24 @@ candidate passes iDX6011 Pro hardware and reboot acceptance.
 - A `/usr` or `/etc` mount the installer or the beta recovery script made
   writable is put back read-only on exit; a failed restore only warns. The
   installer opens them only after its network steps, so a killed download
-  cannot leave them writable.
+  cannot leave them writable. A stacked mount is judged by its top layer.
 - The beta recovery script also restores `ugreen-netdevmon@.service` and legacy
   `ugreen-netdevmon@<nic>` instances.
-- `ugreen-power-led.service` is always enabled and restarted: it also applies
-  color and brightness, and the old check never matched upstream's `"none"`.
+- A beta recovery that cannot unload a busy driver restarts the monitors, says
+  so and restores nothing, so it can simply be rerun.
+- `--idx-test collect` no longer stops on an off-pool module beside the script
+  or in the current folder; it collects in `/tmp` like a machine with no install.
+- The beta test prints the recovery command right after the backup, so a dropped
+  SSH session does not lose it.
 
 ### Removed
 
 - Copies of the helper scripts in `/usr/bin`: units use the persistent copies.
   Uninstall and the beta backup still handle copies from older installs.
 - The informational network interface scan, so `ip` is no longer required.
-- The legacy `install_ugreen_leds_controller_v1.0.sh`.
+- The LED-name patch of `ugreen-netdevmon`: the installer never starts that
+  monitor and removes its `@` instances at boot. Started by hand, it uses
+  upstream's `netdev` LED and ignores `NETDEV_LED_NAMES`.
 
 ## [2.0.9] - 2026-04-18
 

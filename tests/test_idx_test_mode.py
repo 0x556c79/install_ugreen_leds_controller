@@ -152,7 +152,7 @@ printf '%s\\n' "${prefix}Enumerating disks based on serial..." "${prefix}serial 
     def test_backup_preserves_original_files_and_excludes_unrelated_data(self):
         original = "NETDEV_LED_NAMES=network_stat\nBLINK_TYPE_POWER=none\n"
         (self.persist / "ugreen-leds.conf").write_text(original)
-        (self.persist / ".module-fallback").write_text("25.10.3\n")
+        (self.persist / ".installer-source").write_text("fixture\n")
         (self.persist / "private-unrelated.txt").write_text("not installer owned")
         legacy_copy = self.write("usr/bin/ugreen-diskiomon", "from an older install")
         result = self.execute(["idx_test_backup"], "idx_test_backup")
@@ -160,7 +160,7 @@ printf '%s\\n' "${prefix}Enumerating disks based on serial..." "${prefix}serial 
         with tarfile.open(self.run / "backup/files.tar") as archive:
             name = str(self.persist / "ugreen-leds.conf").lstrip("/")
             self.assertEqual(archive.extractfile(name).read().decode(), original)
-            self.assertIn(str(self.persist / ".module-fallback").lstrip("/"), archive.getnames())
+            self.assertIn(str(self.persist / ".installer-source").lstrip("/"), archive.getnames())
             self.assertIn(str(legacy_copy).lstrip("/"), archive.getnames())
             self.assertFalse(any("private-unrelated" in n for n in archive.getnames()))
         self.assertIn(str(self.persist / "led-ugreen.ko"), (self.run / "backup/absent.txt").read_text())
@@ -232,6 +232,31 @@ printf '%s\\n' "${prefix}Enumerating disks based on serial..." "${prefix}serial 
         self.assertIn("start ugreen-diskiomon.service", calls)
         self.assertLess(calls.index(f"insmod {module} write_protocol=smbus-block"), calls.index("start ugreen-diskiomon.service"))
 
+    def test_backup_refuses_an_old_module_for_another_kernel(self):
+        (self.host / "sys/module/led_ugreen").mkdir(parents=True)
+        (self.persist / "led-ugreen.ko").write_text("old module")
+        self.stub("modinfo", "echo other-kernel")
+        result = self.execute(["idx_test_backup"], "idx_test_backup")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("cannot be verified", result.stderr)
+        self.assertFalse((self.run / "rollback.sh").exists())
+
+    def test_recovery_refuses_a_changed_kernel(self):
+        result = self.execute(["idx_test_backup"], "idx_test_backup")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (self.persist / "ugreen-leds.conf").write_text("CUSTOM=changed\n")
+        self.stub("uname", 'printf "new-kernel\n"')
+        self.stub("depmod", ":")  # A regression must not reach the real depmod.
+        rollback = self.run / "rollback.sh"
+        rollback.write_text(rollback.read_text().replace("${EUID}", "0"))
+        before = self.snapshot()
+        result = subprocess.run(["bash", str(rollback)], text=True, capture_output=True,
+                                timeout=10, env=dict(os.environ, **self.env))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Kernel changed", result.stdout)
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(self.calls.exists())
+
     def test_backup_covers_the_netdevmon_template_and_legacy_instances(self):
         link = self.host / "etc/systemd/system/multi-user.target.wants/ugreen-netdevmon@enp1s0.service"
         link.parent.mkdir(parents=True)
@@ -283,6 +308,7 @@ printf '%s\\n' "${prefix}Enumerating disks based on serial..." "${prefix}serial 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(config.read_text(), "CUSTOM=original\n")
         self.assertEqual(self.calls.read_text().splitlines(), ["mount -o remount,rw /usr"] * 3)
+        self.assertIn("Warning: /usr stays read-only", result.stdout)
         self.assertIn(f"Warning: could not remove {leftover}", result.stdout)
 
     def test_recovery_puts_back_the_mounts_it_opened_and_only_warns_on_failure(self):
@@ -318,7 +344,7 @@ esac''')
                 self.stub("modprobe", 'echo "modprobe $*" >> "$CALLS"')
                 self.stub("insmod", 'echo "insmod $*" >> "$CALLS"; mkdir "$LOADED"')
                 result = self.execute(["idx_test_load_cached_module"],
-                                      'idx_test_load_cached_module; test "$IDX_TEST_MODULE_LOADED_FROM_CACHE" = true',
+                                      'idx_test_load_cached_module',
                                       SYSTEM_PRODUCT_NAME=model, LOADED=str(loaded))
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 calls = self.calls.read_text().splitlines()
@@ -328,21 +354,6 @@ esac''')
                 self.assertEqual("num_netdev_leds=2 num_disk_leds=6" in insmod, model == "iDX6011 Pro")
                 self.assertLess(calls.index(insmod), calls.index("systemctl restart ugreen-probe-leds.service"))
                 self.assertIn("systemctl restart ugreen-diskiomon.service ugreen-netdevmon-multi.service ugreen-power-led.service", calls)
-
-    def test_failed_direct_load_does_not_establish_module_identity(self):
-        for failure in ("unload", "insmod"):
-            with self.subTest(failure=failure):
-                loaded = self.host / "sys/module/led_ugreen"
-                loaded.mkdir(parents=True, exist_ok=True)
-                (self.persist / "led-ugreen.ko").write_text("beta image")
-                self.stub("rmmod", "exit 8" if failure == "unload" else 'rmdir "$LOADED"')
-                self.stub("modprobe", ":")
-                self.stub("insmod", "exit 9")
-                result = self.execute(["idx_test_load_cached_module"],
-                                      """trap 'printf "identity=%s\\n" "$IDX_TEST_MODULE_LOADED_FROM_CACHE"' EXIT; idx_test_load_cached_module""",
-                                      LOADED=str(loaded), IDX_TEST_MODULE_LOADED_FROM_CACHE="true")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("identity=false", result.stdout)
 
     def test_prepare_clears_legacy_overrides_preserving_unrelated_configuration(self):
         for model in ("iDX6011", "iDX6011 Pro"):
@@ -367,10 +378,12 @@ esac''')
         (self.host / "sys/module/led_ugreen").mkdir(parents=True)
         (self.persist / ".module-source").write_text("old source")
         self.stub("rmmod", "exit 1")
+        self.stub("systemctl", 'case "$1" in list-units) echo "ugreen-diskiomon.service loaded active running x";; *) echo "$*" >> "$CALLS";; esac')
         before = self.snapshot()
         result = self.execute(["idx_test_prepare_install"], "idx_test_prepare_install")
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.snapshot(), before)
+        self.assertIn("stop ugreen-diskiomon.service", self.calls.read_text())
 
     def test_backup_failure_stops_before_prepare_and_writes_failed_feedback(self):
         result = self.execute(["run_idx_test", "idx_test_finish"], """
@@ -398,7 +411,7 @@ run_idx_test
         self.write("sys/module/led_ugreen/srcversion", "fixture")
         for led in ("power", "netdev", "netdev2", "disk1", "disk2", "disk3", "disk4", "disk5", "disk6"):
             (self.host / "sys/class/leds" / led).mkdir(parents=True)
-        return dict(IDX_MODULE_SOURCE=source, IDX_TEST_MODULE_LOADED_FROM_CACHE="true")
+        return dict(IDX_MODULE_SOURCE=source)
 
     def test_verification_rejects_inactive_monitor_and_wrong_pro_parameters(self):
         env = self.verification_fixture()
@@ -441,8 +454,8 @@ idx_test_capture() { echo fixture; }
 idx_test_backup() { echo backup >> "$CALLS"; }
 idx_test_prepare_install() { echo prepare >> "$CALLS"; }
 bash() { printf 'install:%s\\n' "$*" >> "$CALLS"; }
-idx_test_load_cached_module() { echo load >> "$CALLS"; IDX_TEST_MODULE_LOADED_FROM_CACHE=true; }
-idx_test_verify() { echo verify >> "$CALLS"; test "$IDX_TEST_MODULE_LOADED_FROM_CACHE" = true; }
+idx_test_load_cached_module() { echo load >> "$CALLS"; }
+idx_test_verify() { echo verify >> "$CALLS"; }
 run_idx_test
 """)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -454,13 +467,6 @@ run_idx_test
         report = next(self.persist.parent.glob("ugreen-idx-test-*/feedback.md"))
         self.assertIn("TECHNICAL PASS", report.read_text())
         self.assertIn("SUCCESS:", result.stdout)
-
-    def test_verification_requires_explicit_module_identity(self):
-        env = self.verification_fixture()
-        env["IDX_TEST_MODULE_LOADED_FROM_CACHE"] = "false"
-        result = self.execute(["idx_test_verify"], "idx_test_verify", **env)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("identity was not established", result.stdout)
 
     def test_verification_rejects_a_module_from_another_source(self):
         env = self.verification_fixture()

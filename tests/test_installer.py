@@ -25,7 +25,7 @@ def bash(code, **env):
 
 class InstallerTests(unittest.TestCase):
     def test_controller_matrix(self):
-        code = "\n".join(function(n) for n in ["is_idx6011_pro_product", "select_controller_profile"])
+        code = function("select_controller_profile")
         for model in ["iDX6011", "iDX6011 Pro", "iDX6012", "DXP4800 GT", "DXP6800 Pro", "unknown", ""]:
             for requested in ["auto", "upstream", "idx6011"]:
                 with self.subTest(model=model, requested=requested):
@@ -35,6 +35,7 @@ read_system_product_name() { printf "%s" "$MODEL"; }
 IDX_UPSTREAM_TAG=v0.4-beta
 IDX_UPSTREAM_COMMIT=c830a2293cf5c67c58e5a98ca339b089b2b13fc3
 IDX_ARTIFACT_COMMIT=fixture IDX_MODULE_SOURCE=fixture
+REPO_OWNER=miskcoo REPO_NAME=ugreen_leds_controller SCRIPT_REPO_URL=fixture
 select_controller_profile
 printf "%s" "$CONTROLLER_PROFILE"
 ''', MODEL=model, CONTROLLER_SOURCE=requested)
@@ -100,16 +101,6 @@ insmod() { printf "insmod:%s\\n" "$*"; }
                         self.assertEqual("write_protocol=smbus-block" in call, model.startswith("iDX"))
                         self.assertEqual("num_netdev_leds=2" in call, model == "iDX6011 Pro")
                         self.assertEqual("num_disk_leds=6" in call, model == "iDX6011 Pro")
-
-    def test_old_cache_forces_exact_beta_download(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            p = Path(tmp)
-            (p / ".version").write_text("25.10.5\n")
-            (p / ".module-source").write_text("idx6011:klein0r/ugreen_leds_controller@480f114bae69ec2bb7003df5d9c13f788ca6ace6\n")
-            (p / "led-ugreen.ko").touch()
-            result = bash(function("check_version_and_download") + '\nlog() { :; }; set_truenas_name() { :; }; resolve_module_url() { printf "%s\\n" "$*"; }; check_version_and_download', PERSIST_DIR=tmp, TRUENAS_VERSION="25.10.5", TRUENAS_NAME="TrueNAS-SCALE-Goldeye", CONTROLLER_PROFILE="idx6011", CONTROLLER_MODULE_SOURCE="idx6011:miskcoo/ugreen_leds_controller@v0.4-beta:c830a2293cf5c67c58e5a98ca339b089b2b13fc3", DRY_RUN="false")
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.strip(), "25.10.5 TrueNAS-SCALE-Goldeye")
 
     def test_missing_beta_has_no_version_fallback(self):
         result = bash(function("probe_candidate_url") + "\n" + function("resolve_module_url") + '''

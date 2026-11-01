@@ -82,28 +82,14 @@ help() {
     echo
 }
 
-# Variables
-REPO_URL=""
-REPO_OWNER=""
-REPO_NAME=""
-ARTIFACT_REF=""
-ARTIFACT_RAW_REF=""
-BUILD_PATH="build-scripts/truenas/build"
-API_URL=""
-SCRIPT_REPO_URL=""
-SCRIPT_REPO_BRANCH=""
-SCRIPT_REPO_REF=""
-SCRIPT_EXPECTED_COMMIT=""
-SCRIPT_SOURCE_MARKER=""
-CONTROLLER_PROFILE=""
-CONTROLLER_MODULE_SOURCE=""
-SYSTEM_PRODUCT_NAME=""
-
+readonly REPO_OWNER="miskcoo"
+readonly REPO_NAME="ugreen_leds_controller"
+readonly SCRIPT_REPO_URL="https://github.com/miskcoo/ugreen_leds_controller.git"
 readonly IDX_UPSTREAM_TAG="v0.4-beta"
 readonly IDX_UPSTREAM_COMMIT="c830a2293cf5c67c58e5a98ca339b089b2b13fc3"
 readonly IDX_ARTIFACT_COMMIT="42b92b609df02504d5175970c3c121d8e40fa3de"
 readonly IDX_MODULE_SOURCE="idx6011:miskcoo/ugreen_leds_controller@${IDX_UPSTREAM_TAG}:${IDX_UPSTREAM_COMMIT}:${IDX_ARTIFACT_COMMIT}:build-scripts/truenas/build/tags/${IDX_UPSTREAM_TAG}"
-readonly PERSIST_FILES=(led-ugreen.ko led-ugreen.ko.previous .version .module-source .module-fallback .installer-source ugreen-leds.conf install_ugreen_leds_controller.sh)
+readonly PERSIST_FILES=(led-ugreen.ko led-ugreen.ko.previous .version .module-source .installer-source ugreen-leds.conf install_ugreen_leds_controller.sh)
 readonly HELPER_SCRIPTS=(ugreen-diskiomon ugreen-netdevmon ugreen-netdevmon-multi ugreen-probe-leds ugreen-power-led)
 
 # Fetch available TrueNAS builds from GitHub (deferred until after arg parsing)
@@ -129,13 +115,9 @@ UNINSTALL=false
 IDX_TEST_MODE=""
 IDX_TEST_DIR=""
 IDX_TEST_RESULT=""
-IDX_TEST_MODULE_LOADED_FROM_CACHE=false
 IDX_TEST_UNITS=()
 READONLY_ROOT=false
 NEED_MODULE_DOWNLOAD=false
-FALLBACK_RECHECK=false
-TRUENAS_NAME=""
-MODULE_FALLBACK_VERSION=""
 UNINSTALL_LEFT=()
 
 # Usage: require_flag_value "$@" with the flag still in $1
@@ -252,28 +234,13 @@ read_system_product_name() {
     echo "$product"
 }
 
-is_idx6011_pro_product() {
-    local product="$1"
-
-    [ "$product" = "iDX6011 Pro" ]
-}
-
-is_upstream_beta_smbus_product() {
-    local product="$1"
-
-    case "$product" in
-        "DXP4800 GT"|"iDX6011"|"iDX6011 Pro"|"iDX6012") return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
 select_controller_profile() {
     SYSTEM_PRODUCT_NAME=$(read_system_product_name)
     SCRIPT_EXPECTED_COMMIT=""
 
     case "${CONTROLLER_SOURCE}" in
         auto)
-            if is_idx6011_pro_product "${SYSTEM_PRODUCT_NAME}"; then
+            if [ "${SYSTEM_PRODUCT_NAME}" = "iDX6011 Pro" ]; then
                 CONTROLLER_PROFILE="idx6011"
             else
                 CONTROLLER_PROFILE="upstream"
@@ -291,23 +258,17 @@ select_controller_profile() {
 
     case "${CONTROLLER_PROFILE}" in
         upstream)
-            REPO_OWNER="miskcoo"
-            REPO_NAME="ugreen_leds_controller"
             ARTIFACT_REF="gh-actions"
             ARTIFACT_RAW_REF="refs/heads/gh-actions"
             BUILD_PATH="build-scripts/truenas/build"
-            SCRIPT_REPO_URL="https://github.com/miskcoo/ugreen_leds_controller.git"
             SCRIPT_REPO_BRANCH="master"
             SCRIPT_REPO_REF="master"
             CONTROLLER_MODULE_SOURCE="upstream:miskcoo/ugreen_leds_controller:gh-actions"
             ;;
         idx6011)
-            REPO_OWNER="miskcoo"
-            REPO_NAME="ugreen_leds_controller"
             ARTIFACT_REF="${IDX_ARTIFACT_COMMIT}"
             ARTIFACT_RAW_REF="${IDX_ARTIFACT_COMMIT}"
             BUILD_PATH="build-scripts/truenas/build/tags/${IDX_UPSTREAM_TAG}"
-            SCRIPT_REPO_URL="https://github.com/miskcoo/ugreen_leds_controller.git"
             SCRIPT_REPO_BRANCH="${IDX_UPSTREAM_TAG}"
             SCRIPT_REPO_REF="${IDX_UPSTREAM_COMMIT}"
             SCRIPT_EXPECTED_COMMIT="${IDX_UPSTREAM_COMMIT}"
@@ -330,7 +291,7 @@ select_controller_profile() {
         log "System product could not be detected; using profile: ${CONTROLLER_PROFILE}"
     fi
 
-    if [ "${CONTROLLER_SOURCE}" = "idx6011" ] && ! is_idx6011_pro_product "${SYSTEM_PRODUCT_NAME}"; then
+    if [ "${CONTROLLER_SOURCE}" = "idx6011" ] && [ "${SYSTEM_PRODUCT_NAME}" != "iDX6011 Pro" ]; then
         log "WARNING: idx6011 is an experimental manual override for this DMI product; only iDX6011 Pro receives the upstream 2-LAN/6-disk layout automatically"
     fi
 }
@@ -367,9 +328,9 @@ idx_test_find_persist_dir() {
         script_dir=$(dirname "$(readlink -f "$0")")
         if [ -n "$detected" ]; then
             PERSIST_DIR="$detected"
-        elif [ -f "${script_dir}/led-ugreen.ko" ]; then
+        elif [[ "$script_dir" == /mnt/* ]] && [ -f "${script_dir}/led-ugreen.ko" ]; then
             PERSIST_DIR="$script_dir"
-        elif [ -f "${PWD}/leds_controller/led-ugreen.ko" ]; then
+        elif [[ "$PWD" == /mnt/* ]] && [ -f "${PWD}/leds_controller/led-ugreen.ko" ]; then
             PERSIST_DIR="${PWD}/leds_controller"
         fi
     fi
@@ -568,8 +529,13 @@ unit_listing=$(systemctl list-units --state=active --plain --no-legend 'ugreen-*
 mapfile -t units < <(printf '%s\n' "$unit_listing" | awk 'NF {print $1}')
 rm -f "$RUN_DIR/rolled-back"
 for unit in "${units[@]}"; do systemctl stop "$unit"; done
-if [ -d /sys/module/led_ugreen ]; then rmmod led-ugreen; fi
-[ ! -d /sys/module/led_ugreen ] || { echo 'Module is still loaded; stopping.'; exit 1; }
+if [ -d /sys/module/led_ugreen ] && ! rmmod led-ugreen; then
+    # A failed test stopped its monitors before this script ran; only active.txt names those.
+    for unit in "${units[@]}"; do systemctl start "$unit" || true; done
+    while IFS= read -r unit; do systemctl start "$unit" || true; done < "$RUN_DIR/backup/active.txt"
+    echo 'Module is busy; monitors restarted, nothing restored. Stop what uses led-ugreen or reboot, then rerun.'
+    exit 1
+fi
 # Restore only the recorded installer-owned files, including the old disk patch.
 while IFS= read -r path; do
     [ ! -e "$path" ] && [ ! -L "$path" ] || rm -f -- "$path" || echo "Warning: could not remove $path."
@@ -618,10 +584,6 @@ idx_test_prepare_install() {
     mapfile -t IDX_TEST_UNITS < <(printf '%s\n' "$units" | awk 'NF {print $1}')
     for unit in "${IDX_TEST_UNITS[@]}"; do systemctl stop "$unit"; done
     if [ -d /sys/module/led_ugreen ]; then rmmod led-ugreen; fi
-    if [ -d /sys/module/led_ugreen ]; then
-        echo 'Old module is still loaded; refusing the beta test.' >&2
-        return 1
-    fi
     echo 'Old LED module confirmed absent before beta installation.'
     mkdir -p "$PERSIST_DIR"
     if [ ! -f "$config" ] && [ -f /etc/ugreen-leds.conf ]; then
@@ -648,19 +610,16 @@ idx_test_prepare_install() {
 idx_test_load_cached_module() {
     local units unit
     local -a args=(write_protocol=smbus-block)
-    IDX_TEST_MODULE_LOADED_FROM_CACHE=false
     units=$(systemctl list-units --state=active --plain --no-legend 'ugreen-*.service')
     mapfile -t IDX_TEST_UNITS < <(printf '%s\n' "$units" | awk 'NF {print $1}')
     for unit in "${IDX_TEST_UNITS[@]}"; do systemctl stop "$unit"; done
     if [ -d /sys/module/led_ugreen ]; then rmmod led-ugreen; fi
-    [ ! -d /sys/module/led_ugreen ] || { echo 'Cannot replace the loaded module.' >&2; return 1; }
     if [ "$SYSTEM_PRODUCT_NAME" = 'iDX6011 Pro' ]; then
         args+=(num_netdev_leds=2 num_disk_leds=6)
     fi
     modprobe -a i2c-dev ledtrig-oneshot ledtrig-netdev
     sha256sum "$PERSIST_DIR/led-ugreen.ko"
     insmod "$PERSIST_DIR/led-ugreen.ko" "${args[@]}"
-    IDX_TEST_MODULE_LOADED_FROM_CACHE=true
     echo "Loaded the test binary directly from $PERSIST_DIR/led-ugreen.ko"
     systemctl restart ugreen-probe-leds.service
     systemctl restart ugreen-diskiomon.service ugreen-netdevmon-multi.service ugreen-power-led.service
@@ -668,7 +627,6 @@ idx_test_load_cached_module() {
 
 idx_test_verify() {
     local name cached loaded source
-    [ "${IDX_TEST_MODULE_LOADED_FROM_CACHE:-false}" = true ] || { echo 'Active module identity was not established.'; return 1; }
     source=$(cat "$PERSIST_DIR/.module-source")
     [ "$source" = "${IDX_MODULE_SOURCE}" ] || { echo 'Unexpected module source.'; return 1; }
     [ -d /sys/module/led_ugreen ] || { echo 'LED module is not loaded.'; return 1; }
@@ -781,7 +739,7 @@ run_idx_test() {
     idx_test_backup > "$IDX_TEST_DIR/install.log" 2>&1
     script=$(readlink -f "$0")
     idx_test_prepare_install >> "$IDX_TEST_DIR/install.log" 2>&1
-    echo 'Backup saved. Installing the upstream beta; please wait...'
+    printf 'Backup saved. If this session ends, recover with: sudo bash %q\nInstalling the upstream beta; please wait...\n' "$IDX_TEST_DIR/rollback.sh"
     if bash "$script" --controller-source idx6011 --persist-dir "$PERSIST_DIR" --yes >> "$IDX_TEST_DIR/install.log" 2>&1; then
         idx_test_load_cached_module >> "$IDX_TEST_DIR/install.log" 2>&1
         # Give short-lived monitor startup failures time to surface.
@@ -993,7 +951,8 @@ check_and_remount_readonly() {
     local mount_point="$1"
     local mount_opts
 
-    mount_opts=$(mount | grep " on ${mount_point} " | awk '{print $6}' | tr -d '()' || echo "")
+    # A stacked mount prints one line per layer; the last is the one remount acts on.
+    mount_opts=$(mount | grep " on ${mount_point} " | tail -n 1 | awk '{print $6}' | tr -d '()' || echo "")
 
     # Match 'ro' as a distinct comma-separated mount option (avoids matching 'proc', 'errors=remount-ro', etc.)
     if echo ",${mount_opts}," | grep -q ',ro,'; then
@@ -1003,13 +962,11 @@ check_and_remount_readonly() {
             # It remains read-only; preview the conservative persistent-file path.
             return 1
         fi
-        # Recorded first: a signal during mount goes straight to cleanup.
-        REMOUNTED_RW+=("${mount_point}")
         if mount -o remount,rw "${mount_point}" 2>/dev/null; then
+            REMOUNTED_RW+=("${mount_point}")
             log "Successfully remounted ${mount_point} as read-write"
             return 0
         else
-            unset 'REMOUNTED_RW[-1]'
             log "Cannot remount ${mount_point} as read-write"
             return 1
         fi
@@ -1063,10 +1020,6 @@ uninstall_all() {
     local owned=false
     if [ -d "${PERSIST_DIR}" ] && has_install_marker; then
         owned=true
-        # A rerun after a failure or a kill can no longer ask the unit.
-        if [ "${DRY_RUN}" != "true" ]; then
-            [ -e "${PERSIST_DIR}/.installer-source" ] || : > "${PERSIST_DIR}/.installer-source" || true
-        fi
     elif [ -n "${unit_dir}" ] && [ "${unit_dir}" != "${PERSIST_DIR}" ]; then
         # Going on would remove the only proof the real folder may have.
         echo "Error: ${PERSIST_DIR} holds no installation; the installed service uses ${unit_dir}." >&2
@@ -1092,9 +1045,7 @@ uninstall_all() {
     # Find any leftover ugreen-netdevmon@*.service instances
     for svc in /etc/systemd/system/multi-user.target.wants/ugreen-netdevmon@*.service; do
         if [ -e "$svc" ]; then
-            local iface
-            iface=$(basename "$svc" | sed 's/ugreen-netdevmon@\(.*\)\.service/\1/')
-            services_to_stop+=("ugreen-netdevmon@${iface}.service")
+            services_to_stop+=("${svc##*/}")
         fi
     done
 
@@ -1116,12 +1067,7 @@ uninstall_all() {
     log "Removing systemd service files..."
     local service_files=("ugreen-diskiomon.service" "ugreen-netdevmon-multi.service" "ugreen-netdevmon@.service" "ugreen-power-led.service" "ugreen-probe-leds.service")
     for svc_file in "${service_files[@]}"; do
-        local svc_path="/etc/systemd/system/${svc_file}"
-        if [ -f "${svc_path}" ]; then
-            uninstall_remove "${svc_path}"
-        else
-            log "Service file ${svc_path} not found, skipping"
-        fi
+        uninstall_remove "/etc/systemd/system/${svc_file}"
     done
 
     # --- Step 3: Reload systemd daemon ---
@@ -1159,41 +1105,24 @@ uninstall_all() {
     done
 
     # --- Step 5: Remove module autoload configuration ---
-    if [ -f "/etc/modules-load.d/ugreen-led.conf" ]; then
-        uninstall_remove "/etc/modules-load.d/ugreen-led.conf"
-    else
-        log "Module autoload config not found, skipping"
-    fi
+    uninstall_remove "/etc/modules-load.d/ugreen-led.conf"
 
     # --- Step 6: Remove kernel module from system directory ---
-    local sys_module="/lib/modules/${kernel_ver}/extra/led-ugreen.ko"
-    if [ -f "${sys_module}" ]; then
-        uninstall_remove "${sys_module}"
-    else
-        log "System kernel module ${sys_module} not found, skipping"
-    fi
+    uninstall_remove "/lib/modules/${kernel_ver}/extra/led-ugreen.ko"
 
     # --- Step 7: Remove scripts from /usr/bin ---
     log "Removing scripts from /usr/bin..."
     for script in "${HELPER_SCRIPTS[@]}"; do
-        if [ -f "/usr/bin/${script}" ]; then
-            uninstall_remove "/usr/bin/${script}"
-        else
-            log "/usr/bin/${script} not found, skipping"
-        fi
+        uninstall_remove "/usr/bin/${script}"
     done
 
     # --- Step 8: Remove system configuration ---
-    if [ -f "/etc/ugreen-leds.conf" ]; then
-        uninstall_remove "/etc/ugreen-leds.conf"
-    else
-        log "System config /etc/ugreen-leds.conf not found, skipping"
-    fi
+    uninstall_remove "/etc/ugreen-leds.conf"
 
     # --- Step 9: Remove installer-owned files; the folder may be shared ---
     local persist_found=true
     local remove_persist=true
-    local name left_before
+    local name
     if [ -d "${PERSIST_DIR}" ]; then
         if [ "${owned}" != "true" ]; then
             log "${PERSIST_DIR} holds no installation, leaving everything in it alone"
@@ -1220,12 +1149,8 @@ uninstall_all() {
         fi
 
         if [ "${remove_persist}" = "true" ]; then
-            left_before="${#UNINSTALL_LEFT[@]}"
             for name in "${PERSIST_FILES[@]}"; do
-                case "${name}" in
-                    .module-source|.installer-source) ;;
-                    *) uninstall_remove "${PERSIST_DIR}/${name}" ;;
-                esac
+                uninstall_remove "${PERSIST_DIR}/${name}"
             done
             if [ -L "${PERSIST_DIR}/scripts" ]; then
                 log "${PERSIST_DIR}/scripts is a symlink, not following it"
@@ -1241,11 +1166,6 @@ uninstall_all() {
             for name in "${PERSIST_DIR}"/.led-ugreen.ko.download.*; do
                 uninstall_remove "${name}"
             done
-            # Last, and only once nothing else stayed: a rerun needs them to own what is left.
-            if [ "${#UNINSTALL_LEFT[@]}" -eq "${left_before}" ]; then
-                uninstall_remove "${PERSIST_DIR}/.module-source"
-                uninstall_remove "${PERSIST_DIR}/.installer-source"
-            fi
 
             if [ "${DRY_RUN}" = "true" ]; then
                 log "DRY RUN: would remove ${PERSIST_DIR} if nothing else is in it"
@@ -1366,15 +1286,6 @@ find_codename_for_version() {
     echo "$found_codename"
 }
 
-# Goes online, so only a module download or a fallback recheck calls it.
-# Callers run with set -e off and must handle the failure themselves.
-set_truenas_name() {
-    if [ -z "${TRUENAS_NAME}" ]; then
-        fetch_truenas_versions
-        TRUENAS_NAME=$(find_codename_for_version "${TRUENAS_VERSION}")
-    fi
-}
-
 log_separator
 
 # ============================================================================
@@ -1421,8 +1332,7 @@ probe_candidate_url() {
 # Resolves the best available pre-built module URL starting from running_version,
 # then decrementing the patch component (third dot-field) within the same YY.MM train.
 # Never crosses major boundaries (e.g. 25.04 never falls back to 24.10).
-# On success: updates global MODULE_URL. If a fallback is used, also sets
-# MODULE_FALLBACK_VERSION and emits a warning block.
+# On success: updates global MODULE_URL. If a fallback is used, also emits a warning block.
 # On total failure: prints an error and exits.
 resolve_module_url() {
     local running_version="$1"
@@ -1431,7 +1341,6 @@ resolve_module_url() {
     local version_patch_str
     local version_patch
     local candidate_url
-    local is_first
 
     version_major=$(echo "$running_version" | cut -d. -f1,2)
     version_patch_str=$(echo "$running_version" | cut -d. -f3)
@@ -1472,15 +1381,13 @@ resolve_module_url() {
     fi
     # If patch is non-numeric, candidates contains only running_version (no fallback)
 
-    is_first=true
     for candidate in "${candidates[@]}"; do
         candidate_url="${REPO_URL}/${codename}/${candidate}/led-ugreen.ko"
         log "Probing module availability: ${candidate_url}"
 
         if probe_candidate_url "$candidate_url"; then
             MODULE_URL="$candidate_url"
-            if [ "$is_first" != "true" ]; then
-                MODULE_FALLBACK_VERSION="$candidate"
+            if [ "$candidate" != "$running_version" ]; then
                 echo ""
                 echo "=========================================="
                 echo "WARNING: Using fallback kernel module"
@@ -1495,8 +1402,6 @@ resolve_module_url() {
             fi
             return 0
         fi
-
-        is_first=false
     done
 
     # All candidates exhausted: prints an error and exits
@@ -1511,27 +1416,12 @@ resolve_module_url() {
 # ============================================================================
 
 check_version_and_download() {
-    local version_file="${PERSIST_DIR}/.version"
-    local source_file="${PERSIST_DIR}/.module-source"
-    local stored_version=""
-    local stored_source=""
+    local stored_version
+    local stored_source
     local need_download=false
 
-    if [ -f "${version_file}" ]; then
-        stored_version=$(cat "${version_file}" 2>/dev/null || echo "")
-        log "Stored TrueNAS version: ${stored_version:-<none>}"
-    else
-        log "No version file found, will download kernel module"
-        need_download=true
-    fi
-
-    if [ -f "${source_file}" ]; then
-        stored_source=$(cat "${source_file}" 2>/dev/null || echo "")
-        log "Stored module source: ${stored_source:-<none>}"
-    else
-        log "No module source file found, treating cached module as legacy"
-        need_download=true
-    fi
+    stored_version=$(cat "${PERSIST_DIR}/.version" 2>/dev/null || true)
+    stored_source=$(cat "${PERSIST_DIR}/.module-source" 2>/dev/null || true)
 
     if [ "${stored_version}" != "${TRUENAS_VERSION}" ]; then
         log "TrueNAS version changed (${stored_version:-<none>} -> ${TRUENAS_VERSION})"
@@ -1542,17 +1432,6 @@ check_version_and_download() {
     else
         if [ -f "${PERSIST_DIR}/led-ugreen.ko" ]; then
             log "Kernel module already up to date for version ${TRUENAS_VERSION} and source ${CONTROLLER_PROFILE}"
-            need_download=false
-            # The cached fallback keeps working, so no failure here may stop the boot.
-            if [ -f "${PERSIST_DIR}/.module-fallback" ]; then
-                if set_truenas_name && probe_module_url "${REPO_URL}/${TRUENAS_NAME}/${TRUENAS_VERSION}/led-ugreen.ko"; then
-                    log "Exact module for ${TRUENAS_VERSION} is now available, replacing the fallback"
-                    MODULE_URL="${REPO_URL}/${TRUENAS_NAME}/${TRUENAS_VERSION}/led-ugreen.ko"
-                    FALLBACK_RECHECK=true
-                    return 0  # Need to download
-                fi
-                log "No exact module for ${TRUENAS_VERSION} right now, keeping the cached fallback"
-            fi
         else
             log "Kernel module file missing, will download"
             need_download=true
@@ -1564,7 +1443,9 @@ check_version_and_download() {
         if [ "${DRY_RUN}" != "true" ] && [ "${stored_version}" = "${TRUENAS_VERSION}" ] && [ -f "${PERSIST_DIR}/led-ugreen.ko" ]; then
             PREVIOUSLY_ACTIVE_LED_SERVICES=(ugreen-diskiomon.service ugreen-netdevmon-multi.service ugreen-power-led.service)
         fi
-        set_truenas_name || exit 1
+        fetch_truenas_versions
+        # set -e is off in here, so an unsupported version has to stop the run by hand.
+        TRUENAS_NAME=$(find_codename_for_version "${TRUENAS_VERSION}") || exit 1
         log "Verifying kernel module availability..."
         resolve_module_url "${TRUENAS_VERSION}" "${TRUENAS_NAME}"
         return 0  # Need to download
@@ -1580,8 +1461,6 @@ fi
 
 if check_version_and_download; then
     NEED_MODULE_DOWNLOAD=true
-else
-    NEED_MODULE_DOWNLOAD=false
 fi
 
 # ============================================================================
@@ -1628,10 +1507,6 @@ clone_is_optional() {
 
 abort_clone() {
     rm -rf "${CLONE_NEW}"
-    # The cached fallback keeps working, so a failed replacement must not stop the boot.
-    if [ "${FALLBACK_RECHECK}" = "true" ]; then
-        NEED_MODULE_DOWNLOAD=false
-    fi
     if clone_is_optional; then
         log "Warning: $1 Continuing with the installed files; the next run tries again"
         return 0
@@ -1646,14 +1521,6 @@ clone_controller_repository() {
     local stored_clone_source=""
     local needs_clone=false
     local actual_commit=""
-
-    # A run killed between the two renames below left the complete old clone here.
-    if [ "${DRY_RUN}" != "true" ] && has_install_marker; then
-        if [ ! -e "${CLONE_DIR}" ] && [ -d "${CLONE_OLD}/.git" ]; then
-            mv "${CLONE_OLD}" "${CLONE_DIR}"
-        fi
-        rm -rf "${CLONE_OLD}" "${CLONE_NEW}"
-    fi
 
     if [ -f "${clone_marker_file}" ]; then
         stored_clone_source=$(cat "${clone_marker_file}" 2>/dev/null || echo "")
@@ -1679,7 +1546,7 @@ clone_controller_repository() {
             return 0
         fi
 
-        rm -rf "${CLONE_NEW}"
+        rm -rf "${CLONE_NEW}" "${CLONE_OLD}"
         if ! git clone --branch "${SCRIPT_REPO_BRANCH}" --single-branch "${SCRIPT_REPO_URL}" "${CLONE_NEW}" -q; then
             abort_clone "Cloning ${SCRIPT_REPO_URL} failed."
             return 0
@@ -1698,9 +1565,7 @@ clone_controller_repository() {
             log "Verified controller scripts at ${actual_commit}"
         fi
 
-        # Claims the folder first: a kill here must not leave a clone the next run refuses.
-        [ -e "${clone_marker_file}" ] || : > "${clone_marker_file}"
-        # Two renames, so a complete tree exists at every moment.
+        # A run killed between the renames leaves a missing clone, handled like any other.
         if [ -e "${CLONE_DIR}" ]; then
             mv "${CLONE_DIR}" "${CLONE_OLD}"
         fi
@@ -1789,15 +1654,6 @@ validate_downloaded_module() {
     return 0
 }
 
-# Keeps the cached module when only the fallback replacement failed; everything else stops.
-module_download_failed() {
-    rm -f "$1"
-    echo "$2" >&2
-    [ "${FALLBACK_RECHECK}" = "true" ] || exit 1
-    log "Warning: keeping the cached fallback module; the next run tries again"
-    NEED_MODULE_DOWNLOAD=false
-}
-
 install_kernel_module() {
     local module_dest="${PERSIST_DIR}/led-ugreen.ko"
     local module_download=""
@@ -1817,20 +1673,24 @@ install_kernel_module() {
             if ! curl --fail --silent --show-error --location \
                 --connect-timeout 10 --max-time 120 \
                 --output "${module_download}" "${MODULE_URL}"; then
-                module_download_failed "${module_download}" "Kernel module download failed."
-            elif ! validate_downloaded_module "${module_download}"; then
-                module_download_failed "${module_download}" "Kernel module validation failed; the existing cached module was left untouched."
-            else
-                chmod 644 "${module_download}"
-                if [ -f "${module_dest}" ]; then
-                    # Two steps: the next run restores this file, so it must never be a partial copy.
-                    cp -f "${module_dest}" "${PERSIST_DIR}/.led-ugreen.ko.download.previous"
-                    mv -f "${PERSIST_DIR}/.led-ugreen.ko.download.previous" "${module_dest}.previous"
-                    MODULE_SWAP_ACTIVE=true
-                fi
-                mv -f "${module_download}" "${module_dest}"
-                log "Kernel module downloaded and validated successfully"
+                rm -f "${module_download}"
+                echo "Kernel module download failed." >&2
+                exit 1
             fi
+
+            if ! validate_downloaded_module "${module_download}"; then
+                rm -f "${module_download}"
+                echo "Kernel module validation failed; the existing cached module was left untouched." >&2
+                exit 1
+            fi
+
+            chmod 644 "${module_download}"
+            if [ -f "${module_dest}" ]; then
+                mv -f "${module_dest}" "${module_dest}.previous"
+                MODULE_SWAP_ACTIVE=true
+            fi
+            mv -f "${module_download}" "${module_dest}"
+            log "Kernel module downloaded and validated successfully"
         fi
     else
         log "Kernel module download skipped (already up to date)"
@@ -1945,12 +1805,6 @@ commit_module_markers() {
     rm -f "${PERSIST_DIR}/led-ugreen.ko.previous"
     [ "${NEED_MODULE_DOWNLOAD}" = "true" ] || return 0
 
-    if [ -n "${MODULE_FALLBACK_VERSION}" ]; then
-        echo "${MODULE_FALLBACK_VERSION}" > "${PERSIST_DIR}/.module-fallback"
-    else
-        rm -f "${PERSIST_DIR}/.module-fallback"
-    fi
-
     # Update version file
     echo "${TRUENAS_VERSION}" > "${PERSIST_DIR}/.version"
     echo "${CONTROLLER_MODULE_SOURCE}" > "${PERSIST_DIR}/.module-source"
@@ -1959,28 +1813,18 @@ commit_module_markers() {
 }
 
 beta_module_parameters_match() {
-    local write_protocol=""
-    local num_netdev_leds=""
-    local num_disk_leds=""
+    local parameters=/sys/module/led_ugreen/parameters
 
-    if ! is_upstream_beta_smbus_product "${SYSTEM_PRODUCT_NAME}"; then
-        return 0
-    fi
-
-    if [ -r /sys/module/led_ugreen/parameters/write_protocol ]; then
-        write_protocol=$(cat /sys/module/led_ugreen/parameters/write_protocol 2>/dev/null || true)
-    fi
-    [ "${write_protocol}" = "smbus-block" ] || return 1
-
-    if is_idx6011_pro_product "${SYSTEM_PRODUCT_NAME}"; then
-        if [ -r /sys/module/led_ugreen/parameters/num_netdev_leds ]; then
-            num_netdev_leds=$(cat /sys/module/led_ugreen/parameters/num_netdev_leds 2>/dev/null || true)
-        fi
-        if [ -r /sys/module/led_ugreen/parameters/num_disk_leds ]; then
-            num_disk_leds=$(cat /sys/module/led_ugreen/parameters/num_disk_leds 2>/dev/null || true)
-        fi
-        [ "${num_netdev_leds}" = "2" ] && [ "${num_disk_leds}" = "6" ]
-    fi
+    case "${SYSTEM_PRODUCT_NAME}" in
+        "DXP4800 GT"|"iDX6011"|"iDX6012")
+            [ "$(cat "${parameters}/write_protocol" 2>/dev/null)" = "smbus-block" ]
+            ;;
+        "iDX6011 Pro")
+            [ "$(cat "${parameters}/write_protocol" 2>/dev/null)" = "smbus-block" ] &&
+                [ "$(cat "${parameters}/num_netdev_leds" 2>/dev/null)" = "2" ] &&
+                [ "$(cat "${parameters}/num_disk_leds" 2>/dev/null)" = "6" ]
+            ;;
+    esac
 }
 
 # Check if led-ugreen is already loaded via sysfs (more reliable than lsmod which may not be in PATH)
@@ -2047,13 +1891,7 @@ else
             unload_led_module
         fi
 
-        if [ -f "${PERSIST_DIR}/led-ugreen.ko" ]; then
-            insmod "${PERSIST_DIR}/led-ugreen.ko" || module_load_failed "insmod could not load ${PERSIST_DIR}/led-ugreen.ko"
-        elif [ -f "/lib/modules/$(uname -r)/extra/led-ugreen.ko" ]; then
-            modprobe led-ugreen || module_load_failed "modprobe could not load led-ugreen"
-        else
-            module_load_failed "led-ugreen.ko not found"
-        fi
+        insmod "${PERSIST_DIR}/led-ugreen.ko" || module_load_failed "insmod could not load ${PERSIST_DIR}/led-ugreen.ko"
         commit_module_markers
     fi
 fi
@@ -2310,6 +2148,7 @@ discover_leds() {
         return
     fi
 
+    # A failed beta swap restores the old fork's module, which uses these names.
     [[ -d /sys/class/leds/network_stat ]] && echo "network_stat"
     [[ -d /sys/class/leds/network_stat2 ]] && echo "network_stat2"
 }
@@ -2476,41 +2315,6 @@ EOL
     chmod +x "${script_path}"
 }
 
-patch_netdevmon_script() {
-    local script_path="$1"
-
-    if [ ! -f "${script_path}" ]; then
-        return 0
-    fi
-
-    if grep -q 'install_ugreen_leds_controller: dynamic netdev LED selection' "${script_path}" 2>/dev/null; then
-        return 0
-    fi
-
-    if ! grep -q '^led="netdev"$' "${script_path}" 2>/dev/null; then
-        return 0
-    fi
-
-    log "Patching ${script_path}: adding dynamic network LED name selection"
-    awk '
-        /^led="netdev"$/ {
-            print "# install_ugreen_leds_controller: dynamic netdev LED selection"
-            print "if [[ -n \"${NETDEV_LED_NAMES:-}\" ]]; then"
-            print "  read -r led _ <<< \"${NETDEV_LED_NAMES}\""
-            print "elif [[ -d /sys/class/leds/netdev ]]; then"
-            print "  led=\"netdev\""
-            print "elif [[ -d /sys/class/leds/network_stat ]]; then"
-            print "  led=\"network_stat\""
-            print "else"
-            print "  led=\"netdev\""
-            print "fi"
-            next
-        }
-        { print }
-    ' "${script_path}" > "${script_path}.patched" && mv "${script_path}.patched" "${script_path}"
-    chmod +x "${script_path}"
-}
-
 log_separator
 log "Installing scripts and services..."
 
@@ -2553,11 +2357,9 @@ install_scripts_and_services() {
     if [ "${DRY_RUN}" = "true" ]; then
         log "DRY RUN: would patch ${scripts_dest}/ugreen-probe-leds to use insmod fallback"
         log "DRY RUN: would patch ${scripts_dest}/ugreen-netdevmon-multi for iDX dual LAN LEDs"
-        log "DRY RUN: would patch ${scripts_dest}/ugreen-netdevmon for dynamic network LED names"
     else
         patch_probe_leds_script "${scripts_dest}/ugreen-probe-leds" "${PERSIST_DIR}/led-ugreen.ko"
         patch_netdevmon_multi_script "${scripts_dest}/ugreen-netdevmon-multi"
-        patch_netdevmon_script "${scripts_dest}/ugreen-netdevmon"
     fi
 
     # Update and install service files
@@ -2607,27 +2409,15 @@ if [ "${CONTROLLER_PROFILE}" = "idx6011" ]; then
     fi
 fi
 
-if [ "${DRY_RUN}" = "true" ]; then
-    log "DRY RUN: would enable/restart ugreen-diskiomon.service"
-else
-    systemctl enable ugreen-diskiomon.service || true
-    systemctl restart ugreen-diskiomon.service || true
-fi
-
-if [ "${DRY_RUN}" = "true" ]; then
-    log "DRY RUN: would enable/restart ugreen-netdevmon-multi.service"
-else
-    systemctl enable ugreen-netdevmon-multi.service || true
-    systemctl restart ugreen-netdevmon-multi.service || true
-fi
-
-# The service also applies the power LED color and brightness.
-if [ "${DRY_RUN}" = "true" ]; then
-    log "DRY RUN: would enable/restart ugreen-power-led.service"
-else
-    systemctl enable ugreen-power-led.service || true
-    systemctl restart ugreen-power-led.service || true
-fi
+# The power LED service also applies the power LED color and brightness.
+for service in ugreen-diskiomon.service ugreen-netdevmon-multi.service ugreen-power-led.service; do
+    if [ "${DRY_RUN}" = "true" ]; then
+        log "DRY RUN: would enable/restart ${service}"
+    else
+        systemctl enable "${service}" || true
+        systemctl restart "${service}" || true
+    fi
+done
 
 # Only now, so a signal above still starts them. Their Requires= brought the probe service back.
 PREVIOUSLY_ACTIVE_LED_SERVICES=()
