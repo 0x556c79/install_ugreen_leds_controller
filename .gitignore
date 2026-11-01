@@ -1,39 +1,4 @@
 # ========================================
-# AI Coding Agents & LLM Frameworks
-# ========================================
-.agents/
-.codex/
-.claude/
-
-# Agent-generated workspaces, memory, and outputs
-workspace/
-sandbox/
-output/
-outputs/
-generated/
-artifacts/
-checkpoints/
-runs/
-experiments/
-memory/
-state/
-agent_memory/
-agent_state/
-conversations/
-chat_history*
-*.agent.log
-mempalace.yaml
-
-# LLM caches
-.llm_cache/
-langchain_cache/
-litellm_cache/
-.cache/
-.ruff_cache/
-.mypy_cache/
-.pdm-build/
-
-# ========================================
 # Secrets & Environment (CRITICAL)
 # ========================================
 .env
@@ -128,4 +93,3 @@ temp/
 *.swp
 *.swo
 *~
-entities.json
