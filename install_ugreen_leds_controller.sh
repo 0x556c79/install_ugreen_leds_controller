@@ -566,6 +566,7 @@ for restore_path in /usr /etc "/lib/modules/$(uname -r)"; do
 done
 unit_listing=$(systemctl list-units --state=active --plain --no-legend 'ugreen-*.service')
 mapfile -t units < <(printf '%s\n' "$unit_listing" | awk 'NF {print $1}')
+rm -f "$RUN_DIR/rolled-back"
 for unit in "${units[@]}"; do systemctl stop "$unit"; done
 if [ -d /sys/module/led_ugreen ]; then rmmod led-ugreen; fi
 [ ! -d /sys/module/led_ugreen ] || { echo 'Module is still loaded; stopping.'; exit 1; }
@@ -596,6 +597,7 @@ if [ -f "$RUN_DIR/backup/module-was-loaded" ]; then
     insmod "$module_path" "${args[@]}"
 fi
 while IFS= read -r unit; do systemctl start "$unit"; done < "$RUN_DIR/backup/active.txt"
+touch "$RUN_DIR/rolled-back"
 echo 'Previous LED installation restored. Check the LEDs and services.'
 echo 'TrueNAS Init/Shutdown entries were not changed by the test.'
 ROLLBACK
@@ -696,13 +698,15 @@ idx_test_verify() {
 }
 
 idx_test_finish() {
-    local status="$1"
+    local status="$1" report storage
     trap - EXIT
     set +e
     if [ "$IDX_TEST_MODE" = install ]; then
         idx_test_capture > "$IDX_TEST_DIR/after.txt" 2>&1
     fi
-    if {
+    storage=$(dirname "$PERSIST_DIR")
+    [ "$storage/" != /mnt/ ] || storage=$PERSIST_DIR
+    if report=$(
         printf '# UGREEN iDX hardware feedback\n\nStage: %s\n' "$IDX_TEST_MODE"
         printf 'Technical result: %s (exit %s)\n' "$IDX_TEST_RESULT" "$status"
         printf '\nPlease complete before posting in issue #23:\n'
@@ -716,7 +720,7 @@ idx_test_finish() {
             printf '\n## Installer and verification (last 160 lines)\n```text\n'
             tail -n 160 "$IDX_TEST_DIR/install.log"; printf '\n```\n'
         fi
-    } > "$IDX_TEST_DIR/feedback.md"; then
+    ) && printf '%s\n' "${report//"$storage"/<storage>}" | sed -E 's#/mnt/[^[:space:]]+#<storage>#g' > "$IDX_TEST_DIR/feedback.md"; then
         :
     else
         status=1
@@ -744,12 +748,21 @@ idx_test_finish() {
 }
 
 run_idx_test() {
-    local script
+    local script earlier
     idx_test_find_persist_dir
     SYSTEM_PRODUCT_NAME=$(read_system_product_name)
     if [ "$IDX_TEST_MODE" = install ] && [ "$SYSTEM_PRODUCT_NAME" != iDX6011 ] && [ "$SYSTEM_PRODUCT_NAME" != 'iDX6011 Pro' ]; then
         echo 'The installation test requires exact DMI iDX6011 or iDX6011 Pro; use collect for other DMI values.' >&2
         return 1
+    fi
+    # A second backup would capture the first test's changes, not the original install.
+    if [ "$IDX_TEST_MODE" = install ]; then
+        for earlier in "$(dirname "$PERSIST_DIR")"/ugreen-idx-test-*/rollback.sh; do
+            if [ -f "$earlier" ] && [ ! -e "${earlier%/*}/rolled-back" ]; then
+                printf 'An earlier test was not rolled back. Run this first: sudo bash %q\nDelete its folder instead only if that rollback already ran, or that test passed and you keep the beta: it holds the only copy of your previous install.\n' "$earlier" >&2
+                return 1
+            fi
+        done
     fi
     if [ "$DRY_RUN" = true ]; then
         printf 'DRY RUN: would run iDX stage %s using %s; no report, backup or system changes made.\n' "$IDX_TEST_MODE" "$PERSIST_DIR"

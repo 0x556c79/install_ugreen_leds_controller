@@ -896,7 +896,7 @@ class RealRunTests(unittest.TestCase):
         host = self.swap_ready_host()
         host.mounts.write_text("fixture on /usr type zfs (ro,relatime)\n")
         host.fail_systemctl("daemon-reload")
-        host.fail_systemctl("start ugreen-diskiomon.service", "kill -TERM $PPID")
+        host.fail_systemctl("start ugreen-diskiomon.service --no-block", "{ kill -TERM $PPID; exit 1; }")
         result = host.run("--yes", "--persist-dir", str(host.persist), ACTIVE="1")
         calls = host.take_calls().splitlines()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
@@ -1324,6 +1324,47 @@ esac''')
             self.assertFalse((host.persist / "ugreen_leds_controller/beta-checkout").exists())
             self.assertTrue((host.persist / "ugreen_leds_controller/old-checkout").exists())
         self.install(host, host.persist, "--controller-source", "idx6011", OFFLINE="1", HEAD_COMMIT=SCRIPTS_COMMIT)
+
+    def test_new_idx_test_waits_for_the_rollback_of_the_last_one(self):
+        host = self.idx_host()
+        self.install(host, host.persist, "--controller-source", "idx6011", HEAD_COMMIT=SCRIPTS_COMMIT)
+        arguments = ("--idx-test", "install", "--persist-dir", str(host.persist))
+        self.assertEqual(host.run(*arguments, FAIL_GIT="1").returncode, 1)
+
+        result = host.run(*arguments, HEAD_COMMIT=SCRIPTS_COMMIT)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("/rollback.sh", result.stderr)
+        self.assertEqual(len(list(host.persist.parent.glob("ugreen-idx-test-*"))), 1)
+
+        self.rollback(host)
+        result = host.run(*arguments, HEAD_COMMIT=SCRIPTS_COMMIT)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_idx_report_hides_the_storage_path(self):
+        host = self.idx_host()
+        self.install(host, host.persist, "--controller-source", "idx6011", HEAD_COMMIT=SCRIPTS_COMMIT)
+        result = host.run("--idx-test", "install", "--persist-dir", str(host.persist), HEAD_COMMIT=SCRIPTS_COMMIT)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = next(host.persist.parent.glob("ugreen-idx-test-*/feedback.md")).read_text()
+        self.assertNotIn("/mnt/", report)
+        self.assertIn("<storage>/leds_controller", report)
+
+    def test_idx_report_hides_a_path_outside_the_storage_folder(self):
+        host = self.idx_host()
+        host.stub("journalctl", f'echo "ExecStart={host.tree}/mnt/other/leds_controller/scripts/x"')
+        result = host.run("--idx-test", "collect", "--persist-dir", str(host.persist))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = next(host.persist.parent.glob("ugreen-idx-test-*/feedback.md")).read_text()
+        self.assertIn("ExecStart=", report)
+        self.assertNotIn("mnt/other", report)
+
+    def test_idx_report_hides_a_pool_root_folder(self):
+        host = self.idx_host()
+        pool_root = host.tree / "mnt/tank"
+        result = host.run("--idx-test", "collect", "--persist-dir", str(pool_root))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = next((host.tree / "mnt").glob("ugreen-idx-test-*/feedback.md")).read_text()
+        self.assertNotIn("/tank", report)
 
     def test_failed_idx_test_recovery_keeps_the_clone(self):
         host = self.idx_host()

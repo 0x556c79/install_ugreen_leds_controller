@@ -332,7 +332,7 @@ cat /mnt/<POOL>/<PATH>/leds_controller/.installer-source
 **Force module re-download:**
 
 ```bash
-rm /mnt/<POOL>/<PATH>/leds_controller/.module-source
+rm /mnt/<POOL>/<PATH>/leds_controller/.version
 /mnt/<POOL>/<PATH>/leds_controller/install_ugreen_leds_controller.sh --yes
 ```
 

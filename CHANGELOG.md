@@ -38,11 +38,14 @@ Check these before upgrading; details are under Fixed and Removed.
 - Two-stage `--idx-test collect|install` workflow: automatic hardware report,
   mandatory configuration/file backup before changes, fresh beta installation,
   explicit cached-module loading, service checks and a shareable `feedback.md`.
-- `feedback.md` is safe to post: it leaves out journal hostnames and the disk
-  serials the monitor logs under `MAPPING_METHOD=serial`.
+- `feedback.md` is safe to post: it leaves out journal hostnames, the disk
+  serials the monitor logs under `MAPPING_METHOD=serial`, and every `/mnt/` path,
+  which shows as `<storage>`.
 - A per-test recovery script restores the previous installer-owned files,
   clone, module parameters and service states; early failures also produce a
-  report.
+  report. A new `--idx-test install` beside the same storage folder is refused
+  until the last test is rolled back or its folder deleted, so its backup does
+  not capture a failed test.
 - Reduced the tester guide to collection, installation and visual feedback.
 
 

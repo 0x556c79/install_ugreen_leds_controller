@@ -40,7 +40,10 @@ The installer automatically:
 
 Read the final console result. **Installation success still needs your visual
 LED check.** If installation fails, share the report and use the printed
-rollback command if you need to restore the previous installation.
+rollback command if you need to restore the previous installation. Run that
+command before you try again: a new test is refused until the last one is
+rolled back, because its backup would hold the failed test instead of your
+original installation.
 
 After a successful installation, check the LEDs during normal use:
 

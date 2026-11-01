@@ -56,7 +56,7 @@ sudo bash install_ugreen_leds_controller.sh -h            # help
 
 ## Script Architecture
 
-The script is a single file (2,679 lines) organized into named functions:
+The script is a single file (2,692 lines) organized into named functions:
 
 | Function | Purpose |
 | -------- | ------- |
@@ -67,7 +67,7 @@ The script is a single file (2,679 lines) organized into named functions:
 | `fetch_truenas_versions()` | GitHub API discovery of codename folders; warns when the API returns nothing |
 | `find_codename_for_version()` | Maps TrueNAS version → build codename, falling back to a hardcoded table |
 | `set_truenas_name()` | Looks up the codename once, only when a download or fallback recheck needs it |
-| `run_idx_test()` | Runs collection or a backed-up beta test with a feedback report and recovery script; the clone moves into the backup before that script exists, because recovery deletes it |
+| `run_idx_test()` | Runs collection or a backed-up beta test with a feedback report and recovery script; the clone moves into the backup before that script exists, because recovery deletes it; a new test waits until the last one is rolled back |
 | `select_controller_profile()` | Selects stable master or the pinned upstream beta from CLI and exact DMI; runs again once the storage folder is known when an `iDX6011`/`iDX6012` install on `auto` is marked `idx6011:`, because stable cannot drive it |
 | `probe_candidate_url()` | Probes with one retry; a remaining network error stops the install |
 | `resolve_module_url()` | Resolves stable fallbacks or requires an exact tagged beta artifact; only a 404 moves to an older candidate |
