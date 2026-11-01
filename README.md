@@ -1,6 +1,6 @@
 # Ugreen LED Controller Installer
 
-Small, single-file Bash installer for the [ugreen_leds_controller](https://github.com/miskcoo/ugreen_leds_controller) project. It clones, installs the kernel module, copies helper scripts and a systemd unit, and enables the service.
+Small, single-file Bash installer for the [ugreen_leds_controller](https://github.com/miskcoo/ugreen_leds_controller) project. It installs the kernel module, the upstream helper scripts and their systemd units, and enables the services.
 
 ## Quick install
 
@@ -11,6 +11,8 @@ Run the following command to install:</br>
 ```bash
 curl -sf https://raw.githubusercontent.com/0x556c79/install_ugreen_leds_controller/main/install_ugreen_leds_controller.sh -o install_ugreen_leds_controller.sh ; sudo bash install_ugreen_leds_controller.sh
 ```
+
+The installer asks where to store its files. That folder must be under `/mnt/`, see [Storage Location Requirements](#important-storage-location-requirements).
 
 ## Compatibility
 
@@ -42,14 +44,15 @@ If upstream confirms another model as working and you have tested this installer
 ### iDX6011 / iDX6011 Pro upstream beta test
 
 The `idx6011` profile uses official upstream `v0.4-beta`, pinned to
-`c830a2293cf5c67c58e5a98ca339b089b2b13fc3`. `auto` selects it **only for exact
-DMI `iDX6011 Pro`**. An `iDX6011` test must explicitly use
+`c830a2293cf5c67c58e5a98ca339b089b2b13fc3`. For a new install, `auto` selects it
+**only for exact DMI `iDX6011 Pro`**. An `iDX6011` test must explicitly use
 `--controller-source idx6011`, including in the TrueNAS Post Init command.
-Other models retain their existing stable-profile selection.
+An `iDX6011` or `iDX6012` install already on this profile stays on it, because
+the stable module cannot drive that hardware. Other models retain their existing stable-profile selection.
 
 | Exact DMI | Upstream beta probe arguments | Automatic beta selection |
 | --- | --- | --- |
-| `iDX6011` | `write_protocol=smbus-block`; LED counts left unspecified | No |
+| `iDX6011` | `write_protocol=smbus-block`; LED counts left unspecified | Only when already on this profile |
 | `iDX6011 Pro` | `write_protocol=smbus-block num_netdev_leds=2 num_disk_leds=6` | Yes |
 
 Unspecified count parameters may read `-1` in sysfs. They select the driver's
@@ -59,7 +62,10 @@ otherwise. Upstream also recognizes `iDX6012` internally, but this project has
 no evidence of a shipping/tested device under that name and does not claim
 hardware support for it.
 
-The module comes from upstream's [tagged artifact tree](https://github.com/miskcoo/ugreen_leds_controller/tree/gh-actions/build-scripts/truenas/build/tags/v0.4-beta).
+The module comes from upstream's [tagged artifact tree](https://github.com/miskcoo/ugreen_leds_controller/tree/42b92b609df02504d5175970c3c121d8e40fa3de/build-scripts/truenas/build/tags/v0.4-beta),
+pinned to artifact commit `42b92b609df02504d5175970c3c121d8e40fa3de`. That tree
+supports exact versions 25.04.0-25.04.2.6 (there is no 25.04.2.2 artifact) and
+25.10.0-25.10.7; a newer TrueNAS needs a version bump of the `IDX_ARTIFACT_COMMIT` constant in the installer.
 This profile requires an exact TrueNAS-version artifact and matching running
 kernel; it never falls back to an older version, stable module, or old fork.
 The 25.10.5 beta artifact has been checked against kernel
@@ -108,20 +114,22 @@ files, module and service states without rerunning the old installer.
 ### Key Features
 
 - ✅ **Persistent Storage**: Stores kernel module and scripts on a writable ZFS pool location
-- ✅ **Version Tracking**: Only downloads kernel modules when TrueNAS version changes
+- ✅ **Version Tracking**: Only downloads kernel modules when the TrueNAS version or controller source changes
 - ✅ **Smart Reuse**: Reuses existing files on subsequent boots (no re-download)
 - ✅ **Auto-Recovery**: Survives TrueNAS updates when configured as Init Script
-- ✅ **Config Preservation**: Your `/etc/ugreen-leds.conf` settings always persist
+- ✅ **Config Preservation**: Your settings survive reboots and updates in the persistent `ugreen-leds.conf`; only `--force` resets them
 
 ### Installation Options
 
-#### Important: Script Location Requirements
+#### Important: Storage Location Requirements
 
-⚠️ **The script MUST be run from a location under `/mnt/`** (on a ZFS pool) to ensure persistence across reboots on TrueNAS Scale. The script will abort if run from outside `/mnt/`.
+⚠️ **The persistent directory MUST be under `/mnt/`** (on a ZFS pool) to survive reboots and TrueNAS updates. The script itself may run from anywhere; it refuses any other storage location before changing anything.
+
+Spaces and non-ASCII characters are fine in this path. Quotes, backslashes, control characters and `&`, `|`, `%`, `$` or a backtick are refused.
 
 #### Automatic Detection
 
-The script intelligently detects the persistent directory location:
+`--persist-dir` and `--pool-path` always win. Otherwise the script detects the persistent directory location, and this detection takes priority over `--use-current-dir`:
 
 1. **Script in `leds_controller/` directory**: If the script is already located in a folder named `leds_controller`, this folder is used as the persistent directory.
 
@@ -140,7 +148,7 @@ The script intelligently detects the persistent directory location:
    sudo bash install_ugreen_leds_controller.sh --yes
    ```
 
-3. **New installation**: If neither condition above is met, the script creates a new `leds_controller/` directory.
+3. **New installation**: If neither condition above is met, the script asks where to create `leds_controller/`. With `--yes` it uses the script's own folder, which must then be under `/mnt/`.
 
 #### Manual Installation Options
 
@@ -191,10 +199,10 @@ To ensure LED controller starts after every reboot:
 4. Configure:
    - **Description**: `UGREEN LED Controller`
    - **Type**: `Command`
-   - **Command**: `/bin/bash /mnt/<POOL>/<PATH>/leds_controller/install_ugreen_leds_controller.sh --yes`
+   - **Command**: `/bin/bash /mnt/<POOL>/<PATH>/leds_controller/install_ugreen_leds_controller.sh --yes` (quote the path if it contains spaces). A storage folder with another name also needs `--persist-dir`, and an install pinned with `-v` keeps that pin until you remove it after a TrueNAS update; the installer prints the exact command to use
    - **When**: `Post Init`
    - **Enabled**: ✓ (checked)
-   - **Timeout**: `10` seconds
+   - **Timeout**: `60` seconds (normal boots are quick and need no network, but the first boot after a TrueNAS update downloads a driver and refreshes the upstream scripts)
 5. Click **Save**
 
 **Why this works:**
@@ -202,7 +210,7 @@ To ensure LED controller starts after every reboot:
 - The script detects it's running from inside the `leds_controller/` directory
 - It uses that directory as the persistent storage location
 - The `--yes` flag enables non-interactive mode for automated execution
-- Version tracking ensures fast subsequent boots (~3-5 seconds, no re-download)
+- Version tracking ensures fast subsequent boots (~3-5 seconds, no network needed)
 
 ### Persistent Directory Structure
 
@@ -210,12 +218,15 @@ The installer creates the following structure:
 
 ```
 /mnt/<POOL>/<PATH>/leds_controller/
-├── .installer-source                           # Tagged helper-script source marker
+├── .installer-source                           # Helper-script source marker
+├── .module-fallback                            # Older module version in use (only while on a fallback)
 ├── .module-source                              # Kernel-module source marker
 ├── .version                                    # TrueNAS version tracker
 ├── led-ugreen.ko                               # Kernel module
+├── led-ugreen.ko.previous                      # Old module, only while a replacement is being loaded
 ├── install_ugreen_leds_controller.sh          # Installer copy for reuse
 ├── ugreen-leds.conf                            # Persistent configuration
+├── ugreen_leds_controller/                     # Kept upstream clone, so boots work offline
 └── scripts/                                    # Installed scripts
     ├── ugreen-diskiomon
     ├── ugreen-netdevmon
@@ -223,7 +234,7 @@ The installer creates the following structure:
     ├── ugreen-probe-leds
     └── ugreen-power-led
 
-/etc/ugreen-leds.conf                          # Your configuration (writable)
+/etc/ugreen-leds.conf                          # Working copy, replaced from ugreen-leds.conf on each run
 ```
 
 ### Configuration Priority
@@ -234,28 +245,35 @@ The installer automatically handles configuration in the following priority orde
 2. **Existing system config**: Migrates `/etc/ugreen-leds.conf` to persistent directory (preserves your settings)
 3. **Template config**: Uses repository template for new installations
 
+`--force` skips the first two and resets both copies to the template.
+
 **Migration Note**: If you have an existing `/etc/ugreen-leds.conf` from a standard installation, it will be automatically detected and copied to your persistent directory on first run, preserving all your custom settings.
 
 ### Command-Line Options
 
 ```
 Options:
-  -h                    Print help message
+  -h, --help            Print help message
   -v <version>          Use specific TrueNAS version (e.g., 24.10.0)
 
-  --persist-dir <path>  Specify custom persistent storage directory
-  --use-current-dir     Use current working directory for leds_controller/ folder
+  --persist-dir <path>  Specify custom persistent storage directory (must be under /mnt/)
+  --use-current-dir     Use current working directory for leds_controller/ folder (must be under /mnt/)
   --pool-path <path>    Specify ZFS pool path under /mnt/
   --controller-source <auto|upstream|idx6011>
                         Select controller source profile (default: auto)
                         auto: beta only for exact iDX6011 Pro DMI
+                        and iDX6011/iDX6012 installs already on idx6011
                         upstream: force stable upstream master
                         idx6011: force experimental upstream v0.4-beta
 
-  --uninstall           Fully uninstall: stop services, unload modules, remove files
+  --idx-test <collect|install>
+                        Collect hardware feedback or run a backed-up beta test
+                        Combines only with --persist-dir, --dry-run and --yes
+  --uninstall           Fully uninstall: stop services, unload modules, remove installer files
+                        Other files in the storage folder stay
   --dry-run             Show actions without making changes
-  --yes                 Non-interactive mode (assume yes to all prompts)
-  --force               Allow destructive actions
+  --yes                 Non-interactive mode (skip all prompts)
+  --force               Re-clone the upstream scripts and replace the LED configuration with the template
 ```
 
 ### Uninstalling
@@ -278,14 +296,19 @@ For non-interactive uninstall (skips confirmation prompts):
 sudo bash install_ugreen_leds_controller.sh --uninstall --yes
 ```
 
-The uninstaller reverses all installation steps: stops services, removes service files, unloads kernel modules, removes configs, scripts, and optionally deletes the persistent directory. No internet access is required.
+The uninstaller reverses all installation steps: stops services, removes service files, unloads kernel modules, and removes configs and scripts. No internet access is required.
+
+In the persistent directory it deletes only the files the installer created. Anything else stays, and the folder itself is removed only if nothing else is in it. A folder with no `.installer-source` or `.module-source` marker, no `.version` beside `led-ugreen.ko` (v2.0.x) and no installed service pointing at it is left alone, and an install refuses to replace an `ugreen_leds_controller` folder there unless you pass `--force`. If such a folder is named while the installed service points at another one, `--uninstall` stops before removing anything and names the right folder. It finds the folder from the installed service; if it reports that no folder was found, rerun with `--persist-dir <path>`. If a file cannot be removed, the uninstaller finishes the remaining cleanup and lists what was left.
 
 ### How It Works
 
-1. **First Run**: Downloads kernel module, installs scripts, copies installer
-2. **Subsequent Runs**: Checks version tracker, reuses existing files if version matches
-3. **Version Change**: Automatically downloads new kernel module when TrueNAS updates
-4. **Read-Only Detection**: Automatically adapts to read-only `/usr` filesystem
+1. **First Run**: Downloads kernel module, clones the upstream scripts, installs them, copies installer
+2. **Subsequent Runs**: Checks version tracker, reuses existing files if version matches; no network needed
+3. **Version Change**: Automatically downloads new kernel module and refreshes the upstream scripts when TrueNAS updates
+4. **Fallback Module**: While on an older module (`.module-fallback`), each run checks once for the exact module and switches when it exists; without network it keeps the cached module
+5. **Read-Only Detection**: Automatically adapts to read-only `/usr` filesystem and restores it when finished
+
+GitHub is needed whenever the module is re-downloaded, plus on a source change, `--force` or a missing clone, not at every boot. A clone that fails while the installed scripts and services are in place only warns. If the driver cannot be loaded, the run puts the previous module and services back and fails with a non-zero exit code instead of reporting success.
 
 ### Troubleshooting
 
@@ -335,8 +358,7 @@ If you have existing installation in system directories:
 1. Run the adapted installer with your preferred persistent directory option
 2. The script will automatically migrate your `/etc/ugreen-leds.conf` to the persistent directory
 3. Service files are updated to reference the new persistent directory paths
-4. Old files in `/usr/bin` remain but are unused
-5. Optionally remove old files: `rm -f /usr/bin/ugreen-* /lib/modules/*/extra/led-ugreen.ko`
+4. The installer no longer writes to `/usr/bin`. Copies from an older install stay there unused until `--uninstall` removes them
 
 **Your configuration is preserved**: The installer detects existing `/etc/ugreen-leds.conf` and copies it to the persistent directory automatically.
 
@@ -344,7 +366,7 @@ If you have existing installation in system directories:
 
 - Full usage, configuration details, and troubleshooting: [project Wiki](https://github.com/0x556c79/install_ugreen_leds_controller/wiki)
 - Use `--dry-run` to preview actions without changing the system
-- Configuration changes in `/etc/ugreen-leds.conf` persist across reboots
+- Make configuration changes in the persistent `ugreen-leds.conf`: each run copies it over `/etc/ugreen-leds.conf`
 
 ## Disclaimer
 

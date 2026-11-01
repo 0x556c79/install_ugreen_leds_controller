@@ -34,12 +34,26 @@ log() { :; }
 read_system_product_name() { printf "%s" "$MODEL"; }
 IDX_UPSTREAM_TAG=v0.4-beta
 IDX_UPSTREAM_COMMIT=c830a2293cf5c67c58e5a98ca339b089b2b13fc3
+IDX_ARTIFACT_COMMIT=fixture IDX_MODULE_SOURCE=fixture
 select_controller_profile
 printf "%s" "$CONTROLLER_PROFILE"
 ''', MODEL=model, CONTROLLER_SOURCE=requested)
                     expected = requested if requested != "auto" else ("idx6011" if model == "iDX6011 Pro" else "upstream")
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(result.stdout, expected)
+
+    def test_cleanup_restores_newest_mount_first_and_keeps_the_exit_status(self):
+        result = bash(function("log") + "\n" + function("cleanup") + '''
+mount() { echo "mount $*"; [[ "$3" != /newest ]]; }
+REMOUNTED_RW=(/oldest /newest)
+trap cleanup EXIT
+exit 7
+''')
+        self.assertEqual(result.returncode, 7, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertEqual([line for line in lines if line.startswith("mount ")],
+                         ["mount -o remount,ro /newest", "mount -o remount,ro /oldest"])
+        self.assertIn("Warning: could not remount /newest read-only", result.stdout)
 
     def test_ata_patch_scope_and_preserved_mappings(self):
         original = (FIXTURES / "ugreen-diskiomon").read_text()
@@ -93,18 +107,18 @@ insmod() { printf "insmod:%s\\n" "$*"; }
             (p / ".version").write_text("25.10.5\n")
             (p / ".module-source").write_text("idx6011:klein0r/ugreen_leds_controller@480f114bae69ec2bb7003df5d9c13f788ca6ace6\n")
             (p / "led-ugreen.ko").touch()
-            result = bash(function("check_version_and_download") + '\nlog() { :; }; resolve_module_url() { printf "%s\\n" "$*"; }; check_version_and_download', PERSIST_DIR=tmp, TRUENAS_VERSION="25.10.5", TRUENAS_NAME="TrueNAS-SCALE-Goldeye", CONTROLLER_PROFILE="idx6011", CONTROLLER_MODULE_SOURCE="idx6011:miskcoo/ugreen_leds_controller@v0.4-beta:c830a2293cf5c67c58e5a98ca339b089b2b13fc3")
+            result = bash(function("check_version_and_download") + '\nlog() { :; }; set_truenas_name() { :; }; resolve_module_url() { printf "%s\\n" "$*"; }; check_version_and_download', PERSIST_DIR=tmp, TRUENAS_VERSION="25.10.5", TRUENAS_NAME="TrueNAS-SCALE-Goldeye", CONTROLLER_PROFILE="idx6011", CONTROLLER_MODULE_SOURCE="idx6011:miskcoo/ugreen_leds_controller@v0.4-beta:c830a2293cf5c67c58e5a98ca339b089b2b13fc3", DRY_RUN="false")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.strip(), "25.10.5 TrueNAS-SCALE-Goldeye")
 
     def test_missing_beta_has_no_version_fallback(self):
-        result = bash(function("resolve_module_url") + '''
+        result = bash(function("probe_candidate_url") + "\n" + function("resolve_module_url") + '''
 log() { :; }
 probe_module_url() { echo "$1" >&2; return 1; }
 CONTROLLER_PROFILE=idx6011
 REPO_URL=https://example.invalid/tags/v0.4-beta
 IDX_UPSTREAM_TAG=v0.4-beta
-REPO_OWNER=miskcoo REPO_NAME=ugreen_leds_controller REPO_BRANCH=gh-actions BUILD_PATH=tags/v0.4-beta
+REPO_OWNER=miskcoo REPO_NAME=ugreen_leds_controller ARTIFACT_REF=gh-actions BUILD_PATH=tags/v0.4-beta
 resolve_module_url 25.10.5 TrueNAS-SCALE-Goldeye
 ''')
         self.assertNotEqual(result.returncode, 0)
@@ -146,7 +160,7 @@ validate_downloaded_module "$MODULE"
                                 tree = root / "host"
                                 persist = tree / "mnt/test/leds_controller"
                                 clone = persist / "ugreen_leds_controller"
-                                for path in ["etc/modules-load.d", "etc/systemd/system/multi-user.target.wants", "sys/class/dmi/id", "sys/module/led_ugreen", "usr/bin", "lib/modules/test/extra", "boot-pool/ROOT/25.10.5/etc", "var/run"]:
+                                for path in ["etc/modules-load.d", "etc/systemd/system/multi-user.target.wants", "sys/class/dmi/id", "sys/module/led_ugreen", "usr/bin", "lib/modules/test/extra"]:
                                     (tree / path).mkdir(parents=True, exist_ok=True)
                                 (clone / "scripts/systemd").mkdir(parents=True)
                                 (clone / ".git").mkdir()
@@ -171,10 +185,8 @@ validate_downloaded_module "$MODULE"
                                 stubs = {cmd: 'printf "%s\\n" "$0 $*" >> "$MUTATIONS"; exit 97' for cmd in ["mkdir", "cp", "mv", "rm", "chmod", "nano", "git", "modprobe", "insmod", "rmmod", "depmod", "touch", "tee"]}
                                 stubs.update({
                                     "curl": 'if [[ "$*" == *--head* ]]; then printf 200; else printf \'{"name":"TrueNAS-SCALE-Goldeye"}\\n\'; fi',
-                                    "mount": 'if (( $# )); then echo "mount $*" >> "$MUTATIONS"; exit 97; fi; printf "fixture on %s type zfs (ro,relatime)\\n" "$HOST/usr" "$HOST/boot-pool/ROOT/25.10.5/etc"',
-                                    "systemctl": 'case "$1" in is-active|is-enabled|show|list-unit-files) exit 0;; *) echo "systemctl $*" >> "$MUTATIONS"; exit 97;; esac',
-                                    "lsmod": 'printf "led_ugreen 123 0\\nledtrig_oneshot 1 0\\n"',
-                                    "ip": 'printf "enp1s0 UP fixture\\n"',
+                                    "mount": 'if (( $# )); then echo "mount $*" >> "$MUTATIONS"; exit 97; fi; echo "fixture on /usr type zfs (ro,relatime)"',
+                                    "systemctl": 'case "$1" in cat|is-active|is-enabled|show|list-unit-files) exit 0;; *) echo "systemctl $*" >> "$MUTATIONS"; exit 97;; esac',
                                     "uname": 'printf "test\\n"',
                                 })
                                 for cmd, body in stubs.items():
@@ -182,7 +194,7 @@ validate_downloaded_module "$MODULE"
                                     target.write_text("#!/bin/bash\n" + body + "\n")
                                     target.chmod(0o755)
                                 script = root / "installer.sh"
-                                script.write_text(re.sub(r"/(?=(?:etc|sys|usr|lib|var|boot-pool)/)", str(tree) + "/", SOURCE))
+                                script.write_text(re.sub(r"/(?=(?:etc|sys|usr|lib)/)", str(tree) + "/", SOURCE))
                                 def snapshot():
                                     return {str(p.relative_to(tree)): (p.stat().st_mode, p.read_bytes() if p.is_file() else None) for p in tree.rglob("*")}
                                 if not existing:

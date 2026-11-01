@@ -63,7 +63,8 @@ module source revision; the explicit checkout is the relevant provenance.
 
 - Dry-run no longer remounts filesystems, invokes configuration editors, or
   deletes a clone on cleanup. Other writes remain behind dry-run checks.
-- Exact-model ATA correction is applied to both installed script copies.
+- Exact-model ATA correction is applied to the installed script in the persistent
+  directory.
 - Old-cache source changes force an exact beta download. The probe fallback
   preserves upstream module arguments. The automated installation test also
   stops monitors, unloads the old module, loads the validated cache directly
@@ -97,5 +98,3 @@ remain hardware gates. Missing equipment leaves the corresponding gate open.
 Keep PR #28 draft. Non-Pro acceptance does not establish Pro acceptance.
 Keep the fallback workflow, build scripts and remote `idx6011-kmods` branch
 until the relevant model-specific hardware and reboot gates are satisfied.
-The procedure's outcome table distinguishes installer, module/layout, SATA,
-and NIC configuration failures before deciding where a fix belongs.

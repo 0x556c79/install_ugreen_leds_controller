@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -32,7 +33,7 @@ class IdxTestModeTests(unittest.TestCase):
         self.stub("uname", 'printf "test-kernel\n"')
         self.stub("findmnt", 'case "$*" in *OPTIONS*) echo rw;; *) echo /;; esac')
         self.stub("mount", 'echo "unexpected mount $*" >> "$CALLS"; exit 97')
-        self.stub("systemctl", 'case "$1" in status|cat|list-unit-files|list-units) exit 0;; is-active) exit 0;; is-enabled) echo disabled;; *) echo "$*" >> "$CALLS"; exit 97;; esac')
+        self.stub("systemctl", 'case "$1" in status|cat|list-units) exit 0;; list-unit-files) exit 1;; is-active) exit 0;; is-enabled) echo disabled;; *) echo "$*" >> "$CALLS"; exit 97;; esac')
         self.stub("journalctl", 'echo "fixture journal"')
         self.stub("i2cdetect", 'echo "fixture i2c adapter"')
         self.stub("lspci", 'echo "fixture PCI controller"')
@@ -54,10 +55,11 @@ class IdxTestModeTests(unittest.TestCase):
         path.chmod(0o755)
 
     def remap(self, code):
-        return re.sub(r"/(?=(?:etc|sys|usr|lib|var|boot-pool|mnt)/)", str(self.host) + "/", code)
+        return re.sub(r"/(?=(?:etc|sys|usr|lib|mnt)/)", str(self.host) + "/", code)
 
     def execute(self, names, tail, **env):
-        code = "\n".join(function(name) for name in names)
+        lists = re.findall(r"^readonly (?:PERSIST_FILES|HELPER_SCRIPTS)=.*$", SOURCE, re.M)
+        code = "\n".join(lists + [function(name) for name in names])
         return bash(self.remap(code) + "\n" + tail, **dict(self.env, **env))
 
     def cli(self, *args):
@@ -87,6 +89,45 @@ class IdxTestModeTests(unittest.TestCase):
         self.assertFalse((reports[0].parent / "backup").exists())
         self.assertEqual(reports[0].stat().st_mode & 0o777, 0o600)
 
+    def test_report_carries_no_hostname_or_disk_serial(self):
+        line = "Nov 01 10:00:00 my-nas ugreen-diskiomon[7]: serial WD-SECRET >> sda"
+        self.stub("systemctl", f'[[ "$*" == *--lines=0* ]] || echo "{line}"')
+        self.stub("journalctl", '''prefix="Nov 01 10:00:00 my-nas ugreen-diskiomon[7]: "
+[[ "$*" == *"-o cat"* ]] && prefix=""
+printf '%s\\n' "${prefix}Enumerating disks based on serial..." "${prefix}serial WD-SECRET >> sda"''')
+        self.stub("lsblk", 'case "$*" in *SERIAL*) echo "sda WD-SECRET";; *) echo "sda 0:0:0:0 sata fixture";; esac')
+        result = self.cli("--idx-test", "collect", "--persist-dir", str(self.persist))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = next(self.persist.parent.glob("ugreen-idx-test-*/feedback.md")).read_text()
+        self.assertIn("Enumerating disks based on serial...", report)
+        self.assertIn("sda 0:0:0:0 sata fixture", report)
+        self.assertNotIn("WD-SECRET", report)
+        self.assertNotIn("my-nas", report)
+
+    def test_install_refuses_a_path_the_child_would_refuse_before_touching_the_driver(self):
+        (self.host / "sys/module/led_ugreen").mkdir(parents=True)
+        (self.host / "mnt/pool/a&b").mkdir()
+        self.stub("rmmod", 'echo "rmmod $*" >> "$CALLS"')
+        persist = self.host / "mnt/pool/a&b/leds_controller"
+        before = self.snapshot()
+        result = self.cli("--idx-test", "install", "--persist-dir", str(persist))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("must not contain", result.stderr)
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(self.calls.exists())
+        result = self.cli("--idx-test", "collect", "--persist-dir", str(persist))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_paths_are_canonicalised_before_the_mnt_check(self):
+        result = self.cli("--idx-test", "collect", "--persist-dir", str(self.host / "mnt/pool/../../etc/evil"))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("Test storage must be under", result.stderr)
+
+    def test_failed_journal_does_not_stop_collection(self):
+        self.stub("journalctl", "exit 1")
+        result = self.cli("--idx-test", "collect", "--persist-dir", str(self.persist))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_dry_run_creates_no_report_or_changes(self):
         for mode in ("collect", "install"):
             with self.subTest(mode=mode):
@@ -111,12 +152,16 @@ class IdxTestModeTests(unittest.TestCase):
     def test_backup_preserves_original_files_and_excludes_unrelated_data(self):
         original = "NETDEV_LED_NAMES=network_stat\nBLINK_TYPE_POWER=none\n"
         (self.persist / "ugreen-leds.conf").write_text(original)
+        (self.persist / ".module-fallback").write_text("25.10.3\n")
         (self.persist / "private-unrelated.txt").write_text("not installer owned")
+        legacy_copy = self.write("usr/bin/ugreen-diskiomon", "from an older install")
         result = self.execute(["idx_test_backup"], "idx_test_backup")
         self.assertEqual(result.returncode, 0, result.stderr)
         with tarfile.open(self.run / "backup/files.tar") as archive:
             name = str(self.persist / "ugreen-leds.conf").lstrip("/")
             self.assertEqual(archive.extractfile(name).read().decode(), original)
+            self.assertIn(str(self.persist / ".module-fallback").lstrip("/"), archive.getnames())
+            self.assertIn(str(legacy_copy).lstrip("/"), archive.getnames())
             self.assertFalse(any("private-unrelated" in n for n in archive.getnames()))
         self.assertIn(str(self.persist / "led-ugreen.ko"), (self.run / "backup/absent.txt").read_text())
         self.assertEqual((self.run / "rollback.sh").stat().st_mode & 0o777, 0o700)
@@ -135,6 +180,8 @@ class IdxTestModeTests(unittest.TestCase):
         new_module.write_text("new beta")
         unrelated = self.persist / "unrelated.txt"
         unrelated.write_text("leave alone")
+        beta_clone = self.persist / "ugreen_leds_controller"
+        beta_clone.mkdir()
         self.stub("depmod", 'echo depmod >> "$CALLS"')
         self.stub("systemctl", 'case "$1" in list-units) exit 0;; *) echo "$*" >> "$CALLS";; esac')
         rollback = self.run / "rollback.sh"
@@ -146,6 +193,7 @@ class IdxTestModeTests(unittest.TestCase):
         self.assertEqual(config.read_text(), "CUSTOM=original\n")
         self.assertEqual(config.stat().st_mode & 0o777, 0o640)
         self.assertFalse(new_module.exists())
+        self.assertFalse(beta_clone.exists())
         self.assertEqual(unrelated.read_text(), "leave alone")
 
     def test_failed_service_enumeration_prevents_prepare_mutations(self):
@@ -160,12 +208,14 @@ class IdxTestModeTests(unittest.TestCase):
         loaded = self.host / "sys/module/led_ugreen"
         loaded.mkdir(parents=True)
         module = self.write("lib/modules/test-kernel/extra/led-ugreen.ko", "original module")
+        self.write("sys/module/led_ugreen/parameters/write_protocol", "smbus-block\n")
         self.stub("modinfo", 'case "$*" in *vermagic*) echo test-kernel;; *) printf "%s\\n" "$ORIGINAL_MODULE";; esac')
+        self.stub("systemctl", 'case "$1" in is-active) exit 0;; is-enabled) [[ "$2" == ugreen-diskiomon.service ]] && echo enabled || echo disabled;; esac')
         result = self.execute(["idx_test_backup"], "idx_test_backup", ORIGINAL_MODULE=str(module))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.run / "backup/module-path").read_text().strip(), str(module))
         module.write_text("new beta")
-        loaded.rmdir()  # Model a test that stopped before loading the beta.
+        shutil.rmtree(loaded)  # Model a test that stopped before loading the beta.
         self.stub("depmod", ":")
         self.stub("modprobe", ":")
         self.stub("insmod", 'echo "insmod $*" >> "$CALLS"; test "$(cat "$1")" = "original module"')
@@ -176,11 +226,31 @@ class IdxTestModeTests(unittest.TestCase):
                                 timeout=10, env=dict(os.environ, **self.env))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(module.read_text(), "original module")
-        self.assertIn("insmod " + str(module), self.calls.read_text())
+        calls = self.calls.read_text().splitlines()
+        self.assertIn(f"insmod {module} write_protocol=smbus-block", calls)
+        self.assertIn("enable ugreen-diskiomon.service", calls)
+        self.assertIn("start ugreen-diskiomon.service", calls)
+        self.assertLess(calls.index(f"insmod {module} write_protocol=smbus-block"), calls.index("start ugreen-diskiomon.service"))
+
+    def test_backup_covers_the_netdevmon_template_and_legacy_instances(self):
+        link = self.host / "etc/systemd/system/multi-user.target.wants/ugreen-netdevmon@enp1s0.service"
+        link.parent.mkdir(parents=True)
+        link.symlink_to("/etc/systemd/system/ugreen-netdevmon@.service")
+        self.stub("systemctl", 'case "$1" in list-units) echo "ugreen-netdevmon@eth9.service loaded active running x";; list-unit-files) exit 1;; is-active) [[ "${!#}" == *@e* ]];; is-enabled) [[ "$2" == *@e* ]] && echo enabled || echo disabled;; esac')
+        result = self.execute(["idx_test_backup"], "idx_test_backup")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with tarfile.open(self.run / "backup/files.tar") as archive:
+            self.assertIn(str(link).lstrip("/"), archive.getnames())
+        self.assertEqual((self.run / "backup/active.txt").read_text().split(),
+                         ["ugreen-netdevmon@eth9.service", "ugreen-netdevmon@enp1s0.service"])
+        self.assertIn("ugreen-netdevmon@enp1s0.service enabled", (self.run / "backup/enabled.txt").read_text())
+        template = self.host / "etc/systemd/system/ugreen-netdevmon@.service"
+        self.assertIn(str(template), (self.run / "backup/absent.txt").read_text())
 
     def test_recovery_remount_failure_stops_before_files_or_services_change(self):
         result = self.execute(["idx_test_backup"], "idx_test_backup")
         self.assertEqual(result.returncode, 0, result.stderr)
+        (self.run / "backup/manifest.txt").write_text("usr/bin/ugreen-diskiomon\n")
         self.stub("findmnt", 'case "$*" in *OPTIONS*) echo ro;; *) echo /fixture;; esac')
         self.stub("mount", "exit 1")
         rollback = self.run / "rollback.sh"
@@ -192,6 +262,49 @@ class IdxTestModeTests(unittest.TestCase):
         self.assertIn("Cannot make", result.stdout)
         self.assertEqual(self.snapshot(), before)
         self.assertFalse(self.calls.exists())
+
+    def test_recovery_continues_past_a_stacked_read_only_mount_holding_no_backup(self):
+        config = self.persist / "ugreen-leds.conf"
+        config.write_text("CUSTOM=original\n")
+        result = self.execute(["idx_test_backup"], "idx_test_backup")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        config.write_text("CUSTOM=changed\n")
+        leftover = self.write("usr/bin/ugreen-diskiomon", "added after the backup")
+        # Real findmnt prints one line per stacked mount, the top one last.
+        self.stub("findmnt", 'case "$*" in *TARGET*) printf "/usr\\n/usr\\n";; *) printf "rw\\nro\\n";; esac')
+        self.stub("mount", 'echo "mount $*" >> "$CALLS"; exit 32')
+        self.stub("depmod", "exit 1")  # As on a read-only /lib/modules.
+        self.stub("rm", 'for a; do [[ "$a" != */usr/bin/* ]] || exit 1; done; exec /bin/rm "$@"')
+        self.stub("systemctl", 'case "$1" in list-units) exit 0;; esac')
+        rollback = self.run / "rollback.sh"
+        rollback.write_text(rollback.read_text().replace("${EUID}", "0"))
+        result = subprocess.run(["bash", str(rollback)], text=True, capture_output=True,
+                                timeout=10, env=dict(os.environ, **self.env))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_text(), "CUSTOM=original\n")
+        self.assertEqual(self.calls.read_text().splitlines(), ["mount -o remount,rw /usr"] * 3)
+        self.assertIn(f"Warning: could not remove {leftover}", result.stdout)
+
+    def test_recovery_puts_back_the_mounts_it_opened_and_only_warns_on_failure(self):
+        result = self.execute(["idx_test_backup"], "idx_test_backup")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.stub("findmnt", '''target=/usr; [[ "${@: -1}" == /etc ]] && target=/etc
+case "$*" in
+    *TARGET*) echo "$target" ;;
+    *) grep -qs "remount,rw $target$" "$CALLS" && echo rw || echo ro ;;
+esac''')
+        self.stub("mount", 'echo "mount $*" >> "$CALLS"; [[ "$*" != "-o remount,ro /etc" ]]')
+        self.stub("depmod", ":")
+        self.stub("systemctl", "exit 0")
+        rollback = self.run / "rollback.sh"
+        rollback.write_text(rollback.read_text().replace("${EUID}", "0"))
+        result = subprocess.run(["bash", str(rollback)], text=True, capture_output=True,
+                                timeout=10, env=dict(os.environ, **self.env))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.calls.read_text().splitlines(),
+                         ["mount -o remount,rw /usr", "mount -o remount,rw /etc",
+                          "mount -o remount,ro /etc", "mount -o remount,ro /usr"])
+        self.assertIn("Warning: could not make /etc read-only again.", result.stdout)
 
     def test_direct_load_uses_cached_binary_and_model_arguments_in_order(self):
         for model in ("iDX6011", "iDX6011 Pro"):
@@ -214,6 +327,7 @@ class IdxTestModeTests(unittest.TestCase):
                 self.assertIn(str(self.persist / "led-ugreen.ko") + " write_protocol=smbus-block", insmod)
                 self.assertEqual("num_netdev_leds=2 num_disk_leds=6" in insmod, model == "iDX6011 Pro")
                 self.assertLess(calls.index(insmod), calls.index("systemctl restart ugreen-probe-leds.service"))
+                self.assertIn("systemctl restart ugreen-diskiomon.service ugreen-netdevmon-multi.service ugreen-power-led.service", calls)
 
     def test_failed_direct_load_does_not_establish_module_identity(self):
         for failure in ("unload", "insmod"):
@@ -276,15 +390,15 @@ run_idx_test
         self.assertNotIn("SUCCESS:", result.stdout)
 
     def verification_fixture(self):
-        tag, commit = "v0.4-beta", "fixturecommit"
-        (self.persist / ".module-source").write_text(f"idx6011:miskcoo/ugreen_leds_controller@{tag}:{commit}:gh-actions:build-scripts/truenas/build/tags/{tag}")
+        source = "idx6011:fixture-source"
+        (self.persist / ".module-source").write_text(source)
         (self.persist / "led-ugreen.ko").write_text("module")
         for name, value in (("write_protocol", "smbus-block"), ("num_netdev_leds", "2"), ("num_disk_leds", "6")):
             self.write("sys/module/led_ugreen/parameters/" + name, value)
         self.write("sys/module/led_ugreen/srcversion", "fixture")
         for led in ("power", "netdev", "netdev2", "disk1", "disk2", "disk3", "disk4", "disk5", "disk6"):
             (self.host / "sys/class/leds" / led).mkdir(parents=True)
-        return dict(IDX_UPSTREAM_TAG=tag, IDX_UPSTREAM_COMMIT=commit, IDX_TEST_MODULE_LOADED_FROM_CACHE="true")
+        return dict(IDX_MODULE_SOURCE=source, IDX_TEST_MODULE_LOADED_FROM_CACHE="true")
 
     def test_verification_rejects_inactive_monitor_and_wrong_pro_parameters(self):
         env = self.verification_fixture()
@@ -348,6 +462,13 @@ run_idx_test
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("identity was not established", result.stdout)
 
+    def test_verification_rejects_a_module_from_another_source(self):
+        env = self.verification_fixture()
+        (self.persist / ".module-source").write_text("idx6011:unpinned-artifact")
+        result = self.execute(["idx_test_verify"], "idx_test_verify", **env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unexpected module source", result.stdout)
+
     def test_verification_rejects_missing_led_and_loaded_binary_mismatch(self):
         env = self.verification_fixture()
         self.write("sys/module/led_ugreen/srcversion", "old-fork")
@@ -360,14 +481,13 @@ run_idx_test
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("LED missing: disk6", result.stdout)
 
-    def test_power_service_is_required_only_when_configured(self):
+    def test_power_service_is_required_even_with_blink_type_none(self):
         env = self.verification_fixture()
         self.stub("systemctl", '[[ "$*" != *ugreen-power-led* ]]')
-        for power_mode in ("none", "oneshot"):
-            with self.subTest(power_mode=power_mode):
-                (self.persist / "ugreen-leds.conf").write_text("BLINK_TYPE_POWER=" + power_mode + "\n")
-                result = self.execute(["idx_test_verify"], "idx_test_verify", **env)
-                self.assertEqual(result.returncode == 0, power_mode == "none", result.stdout + result.stderr)
+        (self.persist / "ugreen-leds.conf").write_text("BLINK_TYPE_POWER=none\n")
+        result = self.execute(["idx_test_verify"], "idx_test_verify", **env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Service not active: ugreen-power-led.service", result.stdout)
 
     def test_feedback_write_failure_never_reports_success(self):
         (self.run / "before.txt").write_text("before fixture")

@@ -7,8 +7,7 @@ Guidance for Agents when working in this repository.
 A single Bash installer script that sets up the [ugreen_leds_controller](https://github.com/miskcoo/ugreen_leds_controller) on TrueNAS SCALE. It downloads a pre-built kernel module, installs systemd services, handles read-only root filesystems, and persists across system updates via ZFS pool storage.
 
 **Latest released version:** v2.0.9 (2026-04-18); current development remains unreleased
-**Main file:** `install_ugreen_leds_controller.sh`  
-**Legacy file (do not use):** `install_ugreen_leds_controller_v1.0.sh`
+**Main file:** `install_ugreen_leds_controller.sh`
 
 See `CHANGELOG.md` for full version history and `README.md` for user-facing documentation.
 
@@ -23,8 +22,8 @@ See `CHANGELOG.md` for full version history and `README.md` for user-facing docu
 
 Stable upstream artifacts cover the table above. The experimental upstream
 `v0.4-beta` profile for iDX6011 Pro has exact-version artifacts only for the
-25.04 and 25.10 trains (currently through 25.10.5); it must not fall back to an
-older module.
+25.04 and 25.10 trains (the pinned artifact commit covers 25.04.0-25.04.2.6
+except 25.04.2.2, and 25.10.0-25.10.7); it must not fall back to an older module.
 
 ## Running the Script
 
@@ -32,7 +31,7 @@ older module.
 # Must be run as root
 sudo bash install_ugreen_leds_controller.sh               # auto-detect version, interactive
 sudo bash install_ugreen_leds_controller.sh -v 25.04.0.1  # pin a specific TrueNAS version
-sudo bash install_ugreen_leds_controller.sh --uninstall   # fully remove everything
+sudo bash install_ugreen_leds_controller.sh --uninstall   # remove services, modules and installer files
 sudo bash install_ugreen_leds_controller.sh --dry-run     # preview actions without changes
 sudo bash install_ugreen_leds_controller.sh --yes         # non-interactive (Init Scripts)
 sudo bash install_ugreen_leds_controller.sh --controller-source idx6011 # force upstream beta
@@ -50,48 +49,65 @@ sudo bash install_ugreen_leds_controller.sh -h            # help
 | `--pool-path <path>` | ZFS pool path under `/mnt/` |
 | `--controller-source <auto\|upstream\|idx6011>` | Exact Pro auto-selection, stable override, or manual upstream beta |
 | `--idx-test <collect\|install>` | Collect hardware feedback or run a backed-up beta installation test |
-| `--uninstall` | Full uninstall (services, modules, files) |
+| `--uninstall` | Full uninstall (services, modules, installer-owned files; other files in storage stay) |
 | `--dry-run` | Preview all actions without executing |
 | `--yes` | Non-interactive mode (skips all prompts) |
-| `--force` | Allow destructive actions |
+| `--force` | Re-clone the upstream scripts and replace the LED configuration with the template |
 
 ## Script Architecture
 
-The script is a single file (~1,960 lines) organized into named functions:
+The script is a single file (2,679 lines) organized into named functions:
 
 | Function | Purpose |
 | -------- | ------- |
 | `log()` | Timestamped stdout logging (UTC) |
 | `log_separator()` | Visual section divider |
-| `cleanup()` | Removes cloned repo on EXIT (trap) |
+| `cleanup()` | EXIT hook that ignores further signals; if a module swap never finished, restores the old module; starts any service the run stopped and did not restart, and those of an install already on this version when its update failed, then remounts `REMOUNTED_RW` read-only newest first, warning on failure. The clone stays for offline boots |
 | `help()` | Prints usage |
-| `fetch_truenas_versions()` | GitHub API discovery of supported versions (with hardcoded fallback) |
-| `find_codename_for_version()` | Maps TrueNAS version → build codename |
-| `run_idx_test()` | Runs collection or a backed-up beta test with a feedback report and recovery script |
-| `select_controller_profile()` | Selects stable master or the pinned upstream beta from CLI and exact DMI |
-| `resolve_module_url()` | Resolves stable fallbacks or requires an exact tagged beta artifact |
-| `determine_persistent_directory()` | 6-priority logic for selecting ZFS storage location |
-| `check_and_remount_readonly()` | Detects and remounts read-only boot-pool datasets |
-| `check_version_and_download()` | Smart download — skips if version unchanged and module present |
+| `fetch_truenas_versions()` | GitHub API discovery of codename folders; warns when the API returns nothing |
+| `find_codename_for_version()` | Maps TrueNAS version → build codename, falling back to a hardcoded table |
+| `set_truenas_name()` | Looks up the codename once, only when a download or fallback recheck needs it |
+| `run_idx_test()` | Runs collection or a backed-up beta test with a feedback report and recovery script; the clone moves into the backup before that script exists, because recovery deletes it |
+| `select_controller_profile()` | Selects stable master or the pinned upstream beta from CLI and exact DMI; runs again once the storage folder is known when an `iDX6011`/`iDX6012` install on `auto` is marked `idx6011:`, because stable cannot drive it |
+| `probe_candidate_url()` | Probes with one retry; a remaining network error stops the install |
+| `resolve_module_url()` | Resolves stable fallbacks or requires an exact tagged beta artifact; only a 404 moves to an older candidate |
+| `require_flag_value()` | Rejects a value flag whose value is missing or starts with a dash |
+| `find_installed_persist_dir()` | Reads the storage folder back from the installed `ugreen-diskiomon` unit, canonicalised because v2.0.x wrote the path as typed |
+| `persist_path_problem()` | Says why an install cannot use a path; shared by the installer and `--idx-test install` |
+| `has_install_marker()` | True when the storage folder holds `.installer-source` or `.module-source`, `.version` with `led-ugreen.ko`, or the installed unit points at it (v2.0.x wrote no marker, and a TrueNAS update removes the unit); only then is a clone there the installer's |
+| `determine_persistent_directory()` | Selects, canonicalises and validates ZFS storage; uninstall also checks the installed unit and never creates it |
+| `check_and_remount_readonly()` | Detects and remounts read-only boot-pool datasets; records each success in `REMOUNTED_RW` |
+| `prepare_writable_system()` | Remounts `/usr` and `/etc` for install and uninstall; sets `READONLY_ROOT` |
+| `check_version_and_download()` | Smart download — skips if version unchanged and module present; while on a fallback, rechecks the exact module once per run and sets `FALLBACK_RECHECK`, so a failed replacement keeps the cached module; before a needed download it queues the monitors of an install already on this version for `cleanup()`, so a failed lookup still brings them up |
 | `copy_installer_to_persistent_dir()` | Self-replicates for use as TrueNAS Init Script |
-| `install_kernel_module()` | Downloads, validates, atomically caches, and installs the selected `.ko` |
+| `clone_is_optional()` | True when no module change or `--force` needs the clone and the scripts and a unit are already installed |
+| `abort_clone()` | Removes the `CLONE_NEW` folder; continues when the clone is optional, otherwise stops. The working clone stays |
+| `clone_controller_repository()` | Refreshes the clone only on a module change, `--force`, a missing clone or a changed marker; verifies in `CLONE_NEW`, then swaps with two renames through `CLONE_OLD` |
+| `module_download_failed()` | Stops the run, or keeps the cached module when only the fallback replacement failed |
+| `install_kernel_module()` | Downloads, validates, atomically caches, and installs the selected `.ko`, keeping the old one as `led-ugreen.ko.previous`, which the next run puts back if this one is killed; makes `/usr` writable only now, after the network steps |
+| `unload_led_module()` | Records the module arguments and runs `rmmod`; a failure stops the run and `cleanup()` restarts the services |
+| `restore_previous_module()` | Puts `led-ugreen.ko.previous` back, also over an existing `/lib/modules` copy, and, unless it never left memory, reloads the cached module with its old arguments; a beta module that was not loaded before the run stays with the probe |
+| `module_load_failed()` | Clears `.version` only for a fresh download with no older module to return to, so the next run downloads again and a cached module keeps booting offline, then exits non-zero |
+| `commit_module_markers()` | Writes `.version`, `.module-source` and `.module-fallback`, only once the new module runs |
 | `patch_probe_leds_script()` | Preserves upstream module arguments in the TrueNAS `insmod` fallback |
 | `patch_diskiomon_script()` | Applies the reported ATA order only to exact non-Pro iDX6011 on beta |
 | `patch_netdevmon_multi_script()` | Maps ordered NICs to stable or upstream-beta network LED names |
 | `check_and_remove_existing_services()` | Removes legacy `ugreen-netdevmon@*` instances |
-| `install_scripts_and_services()` | Copies scripts to `/usr/bin/`, installs + enables systemd units |
+| `install_scripts_and_services()` | Copies scripts to `$PERSIST_DIR/scripts/`, installs systemd units pointing at them; keeps the installed ones when the clone is missing or its marker differs after a failed optional refresh |
 | `print_service_status()` | Color-coded service status summary |
-| `uninstall_all()` | 9-step full uninstall |
+| `uninstall_remove()` | Removes one path, recording a failure instead of stopping the cleanup |
+| `uninstall_all()` | 9-step full uninstall; deletes only `PERSIST_FILES`, `HELPER_SCRIPTS`, clones and partial `.led-ugreen.ko.download.*` files from storage, and nothing from a folder without an install marker or matching unit. Refuses a folder with no install while the unit points elsewhere. A unit-only install gets a marker first; the markers go last, and only if nothing else stayed, so a rerun can finish |
 
 ## Key Constraints
 
 - Script must be run as **root**.
-- Persistent storage defaults to a directory under `/mnt/<pool>/` — survives TrueNAS updates. The old v1.0 approach of using `$CWD` directly is no longer the primary path.
-- TrueNAS SCALE mounts `/usr` and `/etc` read-only by default; the script detects this and remounts with write access as needed.
-- Requires internet access to `raw.githubusercontent.com` and `api.github.com` (falls back to hardcoded version list if unavailable).
-- Runtime dependencies: `git`, `curl`, `ip`, `modinfo`, `modprobe`, `depmod`, `systemctl`.
+- Persistent storage must be under `/mnt/<pool>/` — survives TrueNAS updates. Installs refuse any other location and paths with `"`, `'`, `\`, `&`, `|`, `%`, `$`, backtick or control characters; spaces and non-ASCII stay allowed. Uninstall has neither restriction.
+- TrueNAS SCALE mounts `/usr` and `/etc` read-only by default; the script detects this, remounts with write access as needed and restores read-only on exit.
+- Needs internet access to `raw.githubusercontent.com`, `api.github.com` and `github.com` only for a first install, a TrueNAS update, a source change, `--force` or a missing clone or module. A clone that fails while nothing else is missing only warns. A normal boot with a matching module and clone makes no network calls; a machine on a fallback module also checks for the exact module, and a failed check keeps the cached one. Codename lookup falls back to a hardcoded table.
+- Runtime dependencies: `git`, `curl`, `modinfo`, `modprobe`, `insmod`, `rmmod`, `depmod`, `mount`, `realpath`, `systemctl`; `nano` for the interactive config edit, `dmidecode` when sysfs has no DMI name. `--idx-test` also needs `tar`, `sha256sum`, `journalctl` and `findmnt`.
 - `auto` selects upstream `v0.4-beta` only for exact DMI product `iDX6011 Pro`; all other models remain on stable `master`. `idx6011` is the explicit experimental override.
-- The beta profile is pinned to tag commit `c830a2293cf5c67c58e5a98ca339b089b2b13fc3`. Its probe service must load the module with model-specific parameters before dependent monitors start.
+- The beta profile is pinned to tag commit `c830a2293cf5c67c58e5a98ca339b089b2b13fc3` and artifact commit `42b92b609df02504d5175970c3c121d8e40fa3de`. Its probe service must load the module with model-specific parameters before dependent monitors start.
+- A newer TrueNAS release needs `IDX_ARTIFACT_COMMIT` bumped: the beta profile only uses exact artifacts from that pinned tree.
 - Do not merge the beta candidate or remove `.github/workflows/build-idx6011-truenas-kmods.yml`, `build-scripts/truenas/`, or the remote `idx6011-kmods` rollback branch until real iDX6011 Pro hardware and reboot acceptance pass.
 
 ## Validation and temporary fallback tooling
