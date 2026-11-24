@@ -498,14 +498,14 @@ run_idx_test
     def test_feedback_write_failure_never_reports_success(self):
         (self.run / "before.txt").write_text("before fixture")
         (self.run / "feedback.md").mkdir()
-        result = self.execute(["idx_test_finish"], 'idx_test_capture() { echo after; }; idx_test_finish 0', IDX_TEST_RESULT="TECHNICAL PASS")
+        result = self.execute(["idx_test_finish"], 'idx_test_capture() { echo after; }; idx_test_finish 0', IDX_TEST_RESULT="TECHNICAL PASS", IDX_TEST_INSTALLED="")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Could not write", result.stderr)
         self.assertNotIn("SUCCESS:", result.stdout)
 
     def test_success_report_still_requires_physical_observations(self):
         (self.run / "before.txt").write_text("before fixture")
-        result = self.execute(["idx_test_finish"], 'idx_test_capture() { echo after; }; idx_test_finish 0', IDX_TEST_RESULT="TECHNICAL PASS")
+        result = self.execute(["idx_test_finish"], 'idx_test_capture() { echo after; }; idx_test_finish 0', IDX_TEST_RESULT="TECHNICAL PASS", IDX_TEST_INSTALLED="")
         self.assertEqual(result.returncode, 0, result.stderr)
         report = (self.run / "feedback.md").read_text()
         self.assertIn("NOT verified automatically", report)

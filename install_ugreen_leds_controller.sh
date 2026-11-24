@@ -89,7 +89,8 @@ readonly IDX_UPSTREAM_TAG="v0.4-beta"
 readonly IDX_UPSTREAM_COMMIT="c830a2293cf5c67c58e5a98ca339b089b2b13fc3"
 readonly IDX_ARTIFACT_COMMIT="42b92b609df02504d5175970c3c121d8e40fa3de"
 readonly IDX_MODULE_SOURCE="idx6011:miskcoo/ugreen_leds_controller@${IDX_UPSTREAM_TAG}:${IDX_UPSTREAM_COMMIT}:${IDX_ARTIFACT_COMMIT}:build-scripts/truenas/build/tags/${IDX_UPSTREAM_TAG}"
-readonly PERSIST_FILES=(led-ugreen.ko led-ugreen.ko.previous .version .module-source .installer-source ugreen-leds.conf install_ugreen_leds_controller.sh)
+# Uninstall removes these in order; the last four prove the folder is an install, so they go last.
+readonly PERSIST_FILES=(ugreen-leds.conf install_ugreen_leds_controller.sh led-ugreen.ko.previous led-ugreen.ko .version .module-source .installer-source)
 readonly HELPER_SCRIPTS=(ugreen-diskiomon ugreen-netdevmon ugreen-netdevmon-multi ugreen-probe-leds ugreen-power-led)
 
 # Fetch available TrueNAS builds from GitHub (deferred until after arg parsing)
@@ -651,7 +652,7 @@ idx_test_verify() {
 }
 
 idx_test_finish() {
-    local status="$1" report storage installed
+    local status="$1" report storage
     trap - EXIT
     set +e
     if [ "$IDX_TEST_MODE" = install ]; then
@@ -659,8 +660,6 @@ idx_test_finish() {
     fi
     storage=$(dirname "$PERSIST_DIR")
     [ "$storage/" != /mnt/ ] || storage=$PERSIST_DIR
-    # An off-pool install is not under storage, and systemctl status prints its path.
-    installed=$(find_installed_persist_dir)
     if report=$(
         printf '# UGREEN iDX hardware feedback\n\nStage: %s\n' "$IDX_TEST_MODE"
         printf 'Technical result: %s (exit %s)\n' "$IDX_TEST_RESULT" "$status"
@@ -675,7 +674,7 @@ idx_test_finish() {
             printf '\n## Installer and verification (last 160 lines)\n```text\n'
             tail -n 160 "$IDX_TEST_DIR/install.log"; printf '\n```\n'
         fi
-    ) && report=${report//"$storage"/<storage>} && { [ -z "$installed" ] || report=${report//"$installed"/<storage>}; } &&
+    ) && report=${report//"$storage"/<storage>} && report=${report//"$IDX_TEST_INSTALLED"/<storage>} &&
         printf '%s\n' "$report" | sed -E 's#/mnt/[^[:space:]]+#<storage>#g' > "$IDX_TEST_DIR/feedback.md"; then
         :
     else
@@ -727,6 +726,8 @@ run_idx_test() {
     umask 077
     IDX_TEST_DIR=$(mktemp -d "$(dirname "$PERSIST_DIR")/ugreen-idx-test-$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")
     IDX_TEST_RESULT='FAILED'
+    # An off-pool install is not under the storage folder, and systemctl status prints its path.
+    IDX_TEST_INSTALLED=$(find_installed_persist_dir)
     trap 'idx_test_finish "$?"' EXIT
     idx_test_capture > "$IDX_TEST_DIR/before.txt" 2>&1
     if [ "$IDX_TEST_MODE" = collect ]; then
@@ -1147,10 +1148,6 @@ uninstall_all() {
         fi
 
         if [ "${remove_persist}" = "true" ]; then
-            # The two markers go last: until then a rerun still sees the folder as an install.
-            for name in "${PERSIST_FILES[@]}"; do
-                [[ "${name}" == .module-source || "${name}" == .installer-source ]] || uninstall_remove "${PERSIST_DIR}/${name}"
-            done
             if [ -L "${PERSIST_DIR}/scripts" ]; then
                 log "${PERSIST_DIR}/scripts is a symlink, not following it"
                 UNINSTALL_LEFT+=("${PERSIST_DIR}/scripts (symlink)")
@@ -1159,14 +1156,20 @@ uninstall_all() {
                     uninstall_remove "${PERSIST_DIR}/scripts/${name}"
                 done
             fi
-            uninstall_remove "${CLONE_DIR}"
             uninstall_remove "${CLONE_NEW}"
             uninstall_remove "${CLONE_OLD}"
+            # Renamed away first, so a killed removal never leaves a half tree the next run would trust.
+            if [ "${DRY_RUN}" != "true" ] && [ ! -e "${CLONE_OLD}" ]; then
+                mv "${CLONE_DIR}" "${CLONE_OLD}" 2>/dev/null || true
+            fi
+            uninstall_remove "${CLONE_OLD}"
+            uninstall_remove "${CLONE_DIR}"
             for name in "${PERSIST_DIR}"/.led-ugreen.ko.download.*; do
                 uninstall_remove "${name}"
             done
-            uninstall_remove "${PERSIST_DIR}/.module-source"
-            uninstall_remove "${PERSIST_DIR}/.installer-source"
+            for name in "${PERSIST_FILES[@]}"; do
+                uninstall_remove "${PERSIST_DIR}/${name}"
+            done
 
             if [ "${DRY_RUN}" = "true" ]; then
                 log "DRY RUN: would remove ${PERSIST_DIR} if nothing else is in it"

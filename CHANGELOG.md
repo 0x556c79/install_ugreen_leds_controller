@@ -99,8 +99,9 @@ candidate passes iDX6011 Pro hardware and reboot acceptance.
   and is refreshed only when the module is re-downloaded, or on a source change,
   `--force`, a missing clone or a changed marker. A failed refresh keeps the
   working clone, and only warns when no module re-download or `--force` needs
-  it and the installed scripts and services are in place. The beta test saves the old clone before it writes the recovery script,
-  so recovery always puts it back.
+  it and the helper scripts and the `ugreen-diskiomon` unit are installed. The
+  beta test saves the old clone before it writes the recovery script, so
+  recovery always puts it back.
 - Module downloads work again on a real host: `modinfo` rejects a temp file whose
   name does not end in `.ko`, so every download failed validation. Partial
   downloads from a killed run are removed by the next download.
@@ -173,7 +174,8 @@ candidate passes iDX6011 Pro hardware and reboot acceptance.
   SSH session does not lose it.
 - A first install killed right after the clone is moved into place is no longer
   refused by the next run.
-- An uninstall killed part way can be rerun: the markers are removed last.
+- An uninstall killed part way can be rerun: the files that prove the folder is
+  an install are removed last, and the clone is renamed away before it is removed.
 - The feedback report also hides the folder of an install outside `/mnt`.
 
 ### Removed

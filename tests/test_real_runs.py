@@ -1,4 +1,5 @@
 """Full installer runs on a fake host. Real rm and cp run only inside a temp dir."""
+import itertools
 import os
 from pathlib import Path
 import re
@@ -181,17 +182,38 @@ class RealRunTests(unittest.TestCase):
         self.assertEqual(list((host.tree / "etc/systemd/system").glob("ugreen-*")), [])
         self.assertIn("All UGREEN LEDs controller components have been removed.", result.stdout)
 
-    def test_uninstall_killed_while_removing_the_clone_can_be_rerun(self):
+    def test_uninstall_killed_part_way_can_be_rerun_or_reinstalled(self):
+        # The clone is removed under either name, depending on whether it is renamed first.
+        targets = {"config": ("/leds_controller/ugreen-leds.conf",), "helper": ("/scripts/ugreen-diskiomon",),
+                   "clone": ("/ugreen_leds_controller", f"/{SWAP_OLD}")}
+        for kind, target, then in itertools.product(("marked", "v2"), targets, ("uninstall", "install")):
+            with self.subTest(kind=kind, target=target, then=then):
+                host = self.host()
+                self.v2_install(host) if kind == "v2" else self.install(host, host.persist)
+                # A kill during rm -rf leaves part of the tree, here the clone's scripts gone.
+                match = " || ".join(f'"$*" == *"{suffix}"' for suffix in targets[target])
+                host.stub("rm", f'if [[ {match} ]]; then /bin/rm -rf "${{!#}}/scripts"; kill -9 $PPID; exit 1; fi; exec /bin/rm "$@"')
+                result = host.run("--uninstall", "--yes", "--persist-dir", str(host.persist))
+                self.assertEqual(result.returncode, -9, result.stdout + result.stderr)
+                (host.bin / "rm").unlink()
+                if then == "uninstall":
+                    result = host.run("--uninstall", "--yes", "--persist-dir", str(host.persist))
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertFalse(host.persist.exists())
+                else:
+                    self.install(host, host.persist)
+                    self.assertTrue((host.persist / "scripts/ugreen-diskiomon").exists())
+                    self.assertTrue((host.tree / "etc/systemd/system/ugreen-diskiomon.service").exists())
+
+    def test_install_removes_a_legacy_netdevmon_instance(self):
         host = self.host()
+        template = host.tree / "etc/systemd/system/ugreen-netdevmon@.service"
+        template.write_text("[Service]\n")
+        link = host.tree / "etc/systemd/system/multi-user.target.wants/ugreen-netdevmon@enp1s0.service"
+        link.symlink_to(template)
         self.install(host, host.persist)
-        host.stub("rm", '[[ "$*" != *"/leds_controller/ugreen_leds_controller" ]] || kill -9 $PPID; exec /bin/rm "$@"')
-        result = host.run("--uninstall", "--yes", "--persist-dir", str(host.persist))
-        self.assertEqual(result.returncode, -9, result.stdout + result.stderr)
-        (host.bin / "rm").unlink()
-        result = host.run("--uninstall", "--yes", "--persist-dir", str(host.persist))
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(host.persist.exists())
-        self.install(host, host.persist)
+        self.assertIn("systemctl stop ugreen-netdevmon@enp1s0.service", host.take_calls())
+        self.assertFalse(link.is_symlink())
 
     def test_uninstall_stops_a_legacy_netdevmon_instance(self):
         host = self.host()
@@ -1417,15 +1439,19 @@ esac''')
         self.assertNotIn("mnt/other", report)
 
     def test_idx_report_hides_an_off_pool_install_folder(self):
-        host = self.idx_host()
-        host.fail_systemctl("cat ugreen-diskiomon.service",
-                            '{ echo "ExecStart=/opt/leds_controller/scripts/ugreen-diskiomon"; exit 0; }')
-        host.stub("journalctl", 'echo "ExecStart=/opt/leds_controller/scripts/ugreen-diskiomon"')
-        result = host.run("--idx-test", "collect", "--persist-dir", str(host.persist))
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        report = next(host.persist.parent.glob("ugreen-idx-test-*/feedback.md")).read_text()
-        self.assertIn("ExecStart=<storage>/scripts/ugreen-diskiomon", report)
-        self.assertNotIn("/opt/", report)
+        for stage in ("collect", "install"):
+            with self.subTest(stage=stage):
+                host = self.idx_host()
+                # A v2.0.x unit; the install stage rewrites it to the pool folder.
+                unit = host.tree / "etc/systemd/system/ugreen-diskiomon.service"
+                unit.write_text("[Service]\nExecStart=/opt/leds_controller/scripts/ugreen-diskiomon\n")
+                host.fail_systemctl("cat ugreen-diskiomon.service", f'{{ cat "{unit}"; exit 0; }}')
+                host.stub("journalctl", 'echo "ExecStart=/opt/leds_controller/scripts/ugreen-diskiomon"')
+                result = host.run("--idx-test", stage, "--persist-dir", str(host.persist), HEAD_COMMIT=SCRIPTS_COMMIT)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                report = next(host.persist.parent.glob("ugreen-idx-test-*/feedback.md")).read_text()
+                self.assertIn("ExecStart=<storage>/scripts/ugreen-diskiomon", report)
+                self.assertNotIn("/opt/", report)
 
     def test_idx_report_hides_a_pool_root_folder(self):
         host = self.idx_host()
