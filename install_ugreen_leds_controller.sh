@@ -1159,10 +1159,9 @@ uninstall_all() {
             uninstall_remove "${CLONE_NEW}"
             uninstall_remove "${CLONE_OLD}"
             # Renamed away first, so a killed removal never leaves a half tree the next run would trust.
-            if [ "${DRY_RUN}" != "true" ] && [ ! -e "${CLONE_OLD}" ]; then
-                mv "${CLONE_DIR}" "${CLONE_OLD}" 2>/dev/null || true
+            if [ "${DRY_RUN}" != "true" ] && [ ! -e "${CLONE_OLD}" ] && mv "${CLONE_DIR}" "${CLONE_OLD}" 2>/dev/null; then
+                uninstall_remove "${CLONE_OLD}"
             fi
-            uninstall_remove "${CLONE_OLD}"
             uninstall_remove "${CLONE_DIR}"
             for name in "${PERSIST_DIR}"/.led-ugreen.ko.download.*; do
                 uninstall_remove "${name}"

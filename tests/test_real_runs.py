@@ -183,16 +183,16 @@ class RealRunTests(unittest.TestCase):
         self.assertIn("All UGREEN LEDs controller components have been removed.", result.stdout)
 
     def test_uninstall_killed_part_way_can_be_rerun_or_reinstalled(self):
-        # The clone is removed under either name, depending on whether it is renamed first.
-        targets = {"config": ("/leds_controller/ugreen-leds.conf",), "helper": ("/scripts/ugreen-diskiomon",),
-                   "clone": ("/ugreen_leds_controller", f"/{SWAP_OLD}")}
+        targets = {"config": "/leds_controller/ugreen-leds.conf", "helper": "/scripts/ugreen-diskiomon",
+                   "clone": f"/{SWAP_OLD}", "version": "/leds_controller/.version"}
         for kind, target, then in itertools.product(("marked", "v2"), targets, ("uninstall", "install")):
+            if kind == "v2" and target == "version":
+                continue  # Only the .version and module pair proves a v2 folder; one rm between them is accepted.
             with self.subTest(kind=kind, target=target, then=then):
                 host = self.host()
                 self.v2_install(host) if kind == "v2" else self.install(host, host.persist)
                 # A kill during rm -rf leaves part of the tree, here the clone's scripts gone.
-                match = " || ".join(f'"$*" == *"{suffix}"' for suffix in targets[target])
-                host.stub("rm", f'if [[ {match} ]]; then /bin/rm -rf "${{!#}}/scripts"; kill -9 $PPID; exit 1; fi; exec /bin/rm "$@"')
+                host.stub("rm", f'if [[ "$*" == *"{targets[target]}" ]]; then /bin/rm -rf "${{!#}}/scripts"; kill -9 $PPID; exit 1; fi; exec /bin/rm "$@"')
                 result = host.run("--uninstall", "--yes", "--persist-dir", str(host.persist))
                 self.assertEqual(result.returncode, -9, result.stdout + result.stderr)
                 (host.bin / "rm").unlink()
@@ -204,6 +204,18 @@ class RealRunTests(unittest.TestCase):
                     self.install(host, host.persist)
                     self.assertTrue((host.persist / "scripts/ugreen-diskiomon").exists())
                     self.assertTrue((host.tree / "etc/systemd/system/ugreen-diskiomon.service").exists())
+
+    def test_uninstall_reports_a_stuck_leftover_clone_once(self):
+        host = self.host()
+        self.install(host, host.persist)
+        leftover = host.persist / SWAP_OLD
+        leftover.mkdir()
+        host.stub("rm", f'[[ "$*" != *"/{SWAP_OLD}" ]] || exit 1; exec /bin/rm "$@"')
+        result = host.run("--uninstall", "--yes", "--persist-dir", str(host.persist))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.count(f"could not remove {leftover}\n"), 1)
+        self.assertEqual(result.stdout.count(f"  {leftover}\n"), 1)
+        self.assertFalse((host.persist / "ugreen_leds_controller").exists())
 
     def test_install_removes_a_legacy_netdevmon_instance(self):
         host = self.host()
