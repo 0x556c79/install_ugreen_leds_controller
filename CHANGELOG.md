@@ -176,6 +176,8 @@ candidate passes iDX6011 Pro hardware and reboot acceptance.
   refused by the next run.
 - An uninstall killed part way can be rerun: the files that prove the folder is
   an install are removed last, and the clone is renamed away before it is removed.
+  A v2.0.x folder killed just before its `.version` is removed keeps that file
+  for you to delete.
 - The feedback report also hides the folder of an install outside `/mnt`.
 
 ### Removed

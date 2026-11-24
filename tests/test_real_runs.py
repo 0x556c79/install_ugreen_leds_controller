@@ -186,7 +186,7 @@ class RealRunTests(unittest.TestCase):
         targets = {"config": "/leds_controller/ugreen-leds.conf", "helper": "/scripts/ugreen-diskiomon",
                    "clone": f"/{SWAP_OLD}", "version": "/leds_controller/.version"}
         for kind, target, then in itertools.product(("marked", "v2"), targets, ("uninstall", "install")):
-            if kind == "v2" and target == "version":
+            if kind == "v2" and target == "version" and then == "uninstall":
                 continue  # Only the .version and module pair proves a v2 folder; one rm between them is accepted.
             with self.subTest(kind=kind, target=target, then=then):
                 host = self.host()
