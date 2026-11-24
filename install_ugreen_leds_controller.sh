@@ -93,8 +93,6 @@ readonly PERSIST_FILES=(led-ugreen.ko led-ugreen.ko.previous .version .module-so
 readonly HELPER_SCRIPTS=(ugreen-diskiomon ugreen-netdevmon ugreen-netdevmon-multi ugreen-probe-leds ugreen-power-led)
 
 # Fetch available TrueNAS builds from GitHub (deferred until after arg parsing)
-KMOD_DIRS=""
-
 fetch_truenas_versions() {
     echo "Fetching available TrueNAS versions from GitHub..."
     KMOD_DIRS=$(curl -s --connect-timeout 10 --max-time 30 "${API_URL}" | sed -n 's/.*"name":[[:space:]]*"\(TrueNAS-SCALE-[^"]*\)".*/\1/p' || true)
@@ -113,9 +111,6 @@ AUTO_YES=false
 FORCE=false
 UNINSTALL=false
 IDX_TEST_MODE=""
-IDX_TEST_DIR=""
-IDX_TEST_RESULT=""
-IDX_TEST_UNITS=()
 READONLY_ROOT=false
 NEED_MODULE_DOWNLOAD=false
 UNINSTALL_LEFT=()
@@ -656,7 +651,7 @@ idx_test_verify() {
 }
 
 idx_test_finish() {
-    local status="$1" report storage
+    local status="$1" report storage installed
     trap - EXIT
     set +e
     if [ "$IDX_TEST_MODE" = install ]; then
@@ -664,6 +659,8 @@ idx_test_finish() {
     fi
     storage=$(dirname "$PERSIST_DIR")
     [ "$storage/" != /mnt/ ] || storage=$PERSIST_DIR
+    # An off-pool install is not under storage, and systemctl status prints its path.
+    installed=$(find_installed_persist_dir)
     if report=$(
         printf '# UGREEN iDX hardware feedback\n\nStage: %s\n' "$IDX_TEST_MODE"
         printf 'Technical result: %s (exit %s)\n' "$IDX_TEST_RESULT" "$status"
@@ -678,7 +675,8 @@ idx_test_finish() {
             printf '\n## Installer and verification (last 160 lines)\n```text\n'
             tail -n 160 "$IDX_TEST_DIR/install.log"; printf '\n```\n'
         fi
-    ) && printf '%s\n' "${report//"$storage"/<storage>}" | sed -E 's#/mnt/[^[:space:]]+#<storage>#g' > "$IDX_TEST_DIR/feedback.md"; then
+    ) && report=${report//"$storage"/<storage>} && { [ -z "$installed" ] || report=${report//"$installed"/<storage>}; } &&
+        printf '%s\n' "$report" | sed -E 's#/mnt/[^[:space:]]+#<storage>#g' > "$IDX_TEST_DIR/feedback.md"; then
         :
     else
         status=1
@@ -1149,8 +1147,9 @@ uninstall_all() {
         fi
 
         if [ "${remove_persist}" = "true" ]; then
+            # The two markers go last: until then a rerun still sees the folder as an install.
             for name in "${PERSIST_FILES[@]}"; do
-                uninstall_remove "${PERSIST_DIR}/${name}"
+                [[ "${name}" == .module-source || "${name}" == .installer-source ]] || uninstall_remove "${PERSIST_DIR}/${name}"
             done
             if [ -L "${PERSIST_DIR}/scripts" ]; then
                 log "${PERSIST_DIR}/scripts is a symlink, not following it"
@@ -1166,6 +1165,8 @@ uninstall_all() {
             for name in "${PERSIST_DIR}"/.led-ugreen.ko.download.*; do
                 uninstall_remove "${name}"
             done
+            uninstall_remove "${PERSIST_DIR}/.module-source"
+            uninstall_remove "${PERSIST_DIR}/.installer-source"
 
             if [ "${DRY_RUN}" = "true" ]; then
                 log "DRY RUN: would remove ${PERSIST_DIR} if nothing else is in it"
@@ -1418,40 +1419,30 @@ resolve_module_url() {
 check_version_and_download() {
     local stored_version
     local stored_source
-    local need_download=false
 
     stored_version=$(cat "${PERSIST_DIR}/.version" 2>/dev/null || true)
     stored_source=$(cat "${PERSIST_DIR}/.module-source" 2>/dev/null || true)
 
     if [ "${stored_version}" != "${TRUENAS_VERSION}" ]; then
         log "TrueNAS version changed (${stored_version:-<none>} -> ${TRUENAS_VERSION})"
-        need_download=true
     elif [ "${stored_source}" != "${CONTROLLER_MODULE_SOURCE}" ]; then
         log "Controller source changed (${stored_source:-<none>} -> ${CONTROLLER_MODULE_SOURCE})"
-        need_download=true
+    elif [ -f "${PERSIST_DIR}/led-ugreen.ko" ]; then
+        log "Kernel module already up to date for version ${TRUENAS_VERSION} and source ${CONTROLLER_PROFILE}"
+        return 0
     else
-        if [ -f "${PERSIST_DIR}/led-ugreen.ko" ]; then
-            log "Kernel module already up to date for version ${TRUENAS_VERSION} and source ${CONTROLLER_PROFILE}"
-        else
-            log "Kernel module file missing, will download"
-            need_download=true
-        fi
+        log "Kernel module file missing, will download"
     fi
 
-    if [ "${need_download}" = "true" ]; then
-        # A failed update must not keep this boot's install down. Their Requires= starts the probe service.
-        if [ "${DRY_RUN}" != "true" ] && [ "${stored_version}" = "${TRUENAS_VERSION}" ] && [ -f "${PERSIST_DIR}/led-ugreen.ko" ]; then
-            PREVIOUSLY_ACTIVE_LED_SERVICES=(ugreen-diskiomon.service ugreen-netdevmon-multi.service ugreen-power-led.service)
-        fi
-        fetch_truenas_versions
-        # set -e is off in here, so an unsupported version has to stop the run by hand.
-        TRUENAS_NAME=$(find_codename_for_version "${TRUENAS_VERSION}") || exit 1
-        log "Verifying kernel module availability..."
-        resolve_module_url "${TRUENAS_VERSION}" "${TRUENAS_NAME}"
-        return 0  # Need to download
-    else
-        return 1  # Skip download
+    # A failed update must not keep this boot's install down. Their Requires= starts the probe service.
+    if [ "${DRY_RUN}" != "true" ] && [ "${stored_version}" = "${TRUENAS_VERSION}" ] && [ -f "${PERSIST_DIR}/led-ugreen.ko" ]; then
+        PREVIOUSLY_ACTIVE_LED_SERVICES=(ugreen-diskiomon.service ugreen-netdevmon-multi.service ugreen-power-led.service)
     fi
+    fetch_truenas_versions
+    TRUENAS_NAME=$(find_codename_for_version "${TRUENAS_VERSION}")
+    log "Verifying kernel module availability..."
+    resolve_module_url "${TRUENAS_VERSION}" "${TRUENAS_NAME}"
+    NEED_MODULE_DOWNLOAD=true
 }
 
 # A killed swap left the old module here; the markers still describe that one.
@@ -1459,9 +1450,7 @@ if [ "${DRY_RUN}" != "true" ] && [ -f "${PERSIST_DIR}/led-ugreen.ko.previous" ];
     mv -f "${PERSIST_DIR}/led-ugreen.ko.previous" "${PERSIST_DIR}/led-ugreen.ko"
 fi
 
-if check_version_and_download; then
-    NEED_MODULE_DOWNLOAD=true
-fi
+check_version_and_download
 
 # ============================================================================
 # Self-Copy Mechanism
@@ -1518,13 +1507,11 @@ abort_clone() {
 
 clone_controller_repository() {
     local clone_marker_file="${PERSIST_DIR}/.installer-source"
-    local stored_clone_source=""
+    local stored_clone_source
     local needs_clone=false
     local actual_commit=""
 
-    if [ -f "${clone_marker_file}" ]; then
-        stored_clone_source=$(cat "${clone_marker_file}" 2>/dev/null || echo "")
-    fi
+    stored_clone_source=$(cat "${clone_marker_file}" 2>/dev/null || true)
 
     if [ ! -d "${CLONE_DIR}/.git" ]; then
         needs_clone=true
@@ -1569,8 +1556,8 @@ clone_controller_repository() {
         if [ -e "${CLONE_DIR}" ]; then
             mv "${CLONE_DIR}" "${CLONE_OLD}"
         fi
-        mv "${CLONE_NEW}" "${CLONE_DIR}"
         echo "${SCRIPT_SOURCE_MARKER}" > "${clone_marker_file}"
+        mv "${CLONE_NEW}" "${CLONE_DIR}"
         rm -rf "${CLONE_OLD}"
         log "Repository cloned successfully"
     else
@@ -1980,15 +1967,13 @@ check_and_remove_existing_services() {
     # Remove any old single-interface netdevmon@ instances
     for service in "/etc/systemd/system/multi-user.target.wants/${service_name}@"*.service; do
         if [ -e "$service" ]; then
-            local interface
-            interface=$(basename "$service" | sed "s/${service_name}@\(.*\)\.service/\1/")
-            log "Found legacy service for interface ${interface}, removing"
+            log "Found legacy service ${service##*/}, removing"
 
             if [ "${DRY_RUN}" != "true" ]; then
-                systemctl stop "${service_name}@${interface}.service" 2>/dev/null || true
-                systemctl disable "${service_name}@${interface}.service" 2>/dev/null || true
+                systemctl stop "${service##*/}" 2>/dev/null || true
+                systemctl disable "${service##*/}" 2>/dev/null || true
                 rm -f "$service" || true
-                log "Removed ${service_name}@${interface}.service"
+                log "Removed ${service##*/}"
             fi
         fi
     done

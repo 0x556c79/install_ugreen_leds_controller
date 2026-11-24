@@ -59,7 +59,7 @@ class IdxTestModeTests(unittest.TestCase):
 
     def execute(self, names, tail, **env):
         lists = re.findall(r"^readonly (?:PERSIST_FILES|HELPER_SCRIPTS)=.*$", SOURCE, re.M)
-        code = "\n".join(lists + [function(name) for name in names])
+        code = "\n".join(lists + [function(name) for name in names + ["find_installed_persist_dir"]])
         return bash(self.remap(code) + "\n" + tail, **dict(self.env, **env))
 
     def cli(self, *args):

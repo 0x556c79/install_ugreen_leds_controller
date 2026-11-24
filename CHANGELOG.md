@@ -98,8 +98,8 @@ candidate passes iDX6011 Pro hardware and reboot acceptance.
 - A normal boot makes no network calls: the clone stays in the persistent folder
   and is refreshed only when the module is re-downloaded, or on a source change,
   `--force`, a missing clone or a changed marker. A failed refresh keeps the
-  working clone, and only warns when the installed scripts and services are in
-  place. The beta test saves the old clone before it writes the recovery script,
+  working clone, and only warns when no module re-download or `--force` needs
+  it and the installed scripts and services are in place. The beta test saves the old clone before it writes the recovery script,
   so recovery always puts it back.
 - Module downloads work again on a real host: `modinfo` rejects a temp file whose
   name does not end in `.ko`, so every download failed validation. Partial
@@ -171,6 +171,10 @@ candidate passes iDX6011 Pro hardware and reboot acceptance.
   or in the current folder; it collects in `/tmp` like a machine with no install.
 - The beta test prints the recovery command right after the backup, so a dropped
   SSH session does not lose it.
+- A first install killed right after the clone is moved into place is no longer
+  refused by the next run.
+- An uninstall killed part way can be rerun: the markers are removed last.
+- The feedback report also hides the folder of an install outside `/mnt`.
 
 ### Removed
 

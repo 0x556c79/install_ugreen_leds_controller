@@ -306,7 +306,7 @@ In the persistent directory it deletes only the files the installer created. Any
 3. **Version Change**: Automatically downloads new kernel module and refreshes the upstream scripts when TrueNAS updates
 4. **Read-Only Detection**: Automatically adapts to read-only `/usr` filesystem and restores it when finished
 
-GitHub is needed whenever the module is re-downloaded, plus on a source change, `--force` or a missing clone, not at every boot. A clone that fails while the installed scripts and services are in place only warns. If the driver cannot be loaded, the run puts the previous module and services back and fails with a non-zero exit code instead of reporting success.
+GitHub is needed whenever the module is re-downloaded, plus on a source change, `--force` or a missing clone, not at every boot. A failed clone only warns when no module re-download or `--force` needs it and the installed scripts and services are in place; otherwise the run stops. If the driver cannot be loaded, the run puts the previous module and services back and fails with a non-zero exit code instead of reporting success.
 
 ### Troubleshooting
 

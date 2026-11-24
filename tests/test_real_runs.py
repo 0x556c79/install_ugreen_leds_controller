@@ -178,7 +178,30 @@ class RealRunTests(unittest.TestCase):
         self.assertFalse(legacy_copy.exists())
         self.assertFalse((host.tree / "etc/ugreen-leds.conf").exists())
         self.assertFalse((host.tree / "etc/modules-load.d/ugreen-led.conf").exists())
+        self.assertEqual(list((host.tree / "etc/systemd/system").glob("ugreen-*")), [])
         self.assertIn("All UGREEN LEDs controller components have been removed.", result.stdout)
+
+    def test_uninstall_killed_while_removing_the_clone_can_be_rerun(self):
+        host = self.host()
+        self.install(host, host.persist)
+        host.stub("rm", '[[ "$*" != *"/leds_controller/ugreen_leds_controller" ]] || kill -9 $PPID; exec /bin/rm "$@"')
+        result = host.run("--uninstall", "--yes", "--persist-dir", str(host.persist))
+        self.assertEqual(result.returncode, -9, result.stdout + result.stderr)
+        (host.bin / "rm").unlink()
+        result = host.run("--uninstall", "--yes", "--persist-dir", str(host.persist))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(host.persist.exists())
+        self.install(host, host.persist)
+
+    def test_uninstall_stops_a_legacy_netdevmon_instance(self):
+        host = self.host()
+        self.install(host, host.persist)
+        link = host.tree / "etc/systemd/system/multi-user.target.wants/ugreen-netdevmon@enp1s0.service"
+        link.symlink_to(host.tree / "etc/systemd/system/ugreen-netdevmon@.service")
+        host.take_calls()
+        result = host.run("--uninstall", "--yes", "--persist-dir", str(host.persist), ACTIVE="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("systemctl stop ugreen-netdevmon@enp1s0.service", host.take_calls())
 
     def test_uninstall_finishes_and_warns_when_system_files_cannot_be_removed(self):
         host = self.host()
@@ -478,6 +501,14 @@ class RealRunTests(unittest.TestCase):
         (host.script.parent / "led-ugreen.ko").touch()
         result = host.run("--idx-test", "collect", "--dry-run")
         self.assertIn(f"using {host.script.parent}", result.stdout)
+
+    def test_idx_test_finds_the_install_in_the_current_folder(self):
+        host = self.host(script_dir="root")
+        host.persist.mkdir(parents=True)
+        (host.persist / "led-ugreen.ko").touch()
+        result = host.run("--idx-test", "collect", "--dry-run")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"using {host.persist}", result.stdout)
 
     def test_idx_test_ignores_an_off_pool_module_it_only_guessed(self):
         for script_dir, cwd in (("opt/leds_controller", "opt/leds_controller"), ("root", "opt")):
@@ -892,6 +923,14 @@ class RealRunTests(unittest.TestCase):
         self.assertEqual(module.read_text(), "good old")
         self.assertFalse(previous.exists())
 
+    def test_run_killed_before_the_marker_is_written_is_not_refused_next_time(self):
+        host = self.host()
+        host.stub("mv", '/bin/mv "$@"; [[ "$*" != *swap-new* ]] || kill -9 $PPID')
+        result = host.run("--yes", "--persist-dir", str(host.persist))
+        self.assertEqual(result.returncode, -9, result.stdout + result.stderr)
+        host.stub("mv", 'exec /bin/mv "$@"')
+        self.install(host, host.persist)
+
     def test_boot_after_a_kill_between_the_module_renames_uses_the_old_module(self):
         host = self.host()
         self.install(host, host.persist)
@@ -917,6 +956,16 @@ class RealRunTests(unittest.TestCase):
         host.fail_systemctl("stop ugreen-netdevmon-multi.service")
         self.install(host, host.persist, ACTIVE="1")
         self.assertIn("systemctl restart ugreen-diskiomon.service", host.take_calls())
+
+    def test_failed_monitor_start_does_not_stop_the_others(self):
+        for action in ("enable", "restart"):
+            with self.subTest(action=action):
+                host = self.host()
+                host.fail_systemctl(f"{action} ugreen-diskiomon.service")
+                result = host.run("--yes", "--persist-dir", str(host.persist))
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("Installation Complete!", result.stdout)
+                self.assertIn("systemctl restart ugreen-power-led.service", host.take_calls())
 
     def test_failed_new_module_brings_the_working_one_back(self):
         host = self.swap_ready_host()
@@ -1234,11 +1283,23 @@ else cat "$MOUNTS"; fi''')
                 self.assertEqual("systemctl start ugreen-diskiomon.service --no-block" in host.take_calls(), starts)
 
     def test_pro_beta_module_with_wrong_led_counts_fails_the_run(self):
-        host = self.beta_host()
-        (self.beta_parameters(host) / "num_disk_leds").write_text("-1\n")
-        result = host.run("--yes", "--persist-dir", str(host.persist), "--controller-source", "idx6011", HEAD_COMMIT=SCRIPTS_COMMIT)
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("required parameters", result.stderr)
+        for name in ("num_netdev_leds", "num_disk_leds"):
+            with self.subTest(name=name):
+                host = self.beta_host()
+                (self.beta_parameters(host) / name).write_text("-1\n")
+                result = host.run("--yes", "--persist-dir", str(host.persist), "--controller-source", "idx6011", HEAD_COMMIT=SCRIPTS_COMMIT)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("required parameters", result.stderr)
+
+    def test_beta_module_with_the_legacy_protocol_fails_the_run(self):
+        for model in ("iDX6011", "iDX6012", "DXP4800 GT"):
+            with self.subTest(model=model):
+                host = self.beta_host()
+                (host.tree / "sys/class/dmi/id/product_name").write_text(model + "\n")
+                (self.beta_parameters(host) / "write_protocol").write_text("legacy\n")
+                result = host.run("--yes", "--persist-dir", str(host.persist), "--controller-source", "idx6011", HEAD_COMMIT=SCRIPTS_COMMIT)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("required parameters", result.stderr)
 
     def test_beta_module_with_wrong_parameters_or_not_loaded_fails_the_run(self):
         for present, message in ((False, "completed without loading"), (True, "required parameters")):
@@ -1355,6 +1416,17 @@ esac''')
         self.assertIn("ExecStart=", report)
         self.assertNotIn("mnt/other", report)
 
+    def test_idx_report_hides_an_off_pool_install_folder(self):
+        host = self.idx_host()
+        host.fail_systemctl("cat ugreen-diskiomon.service",
+                            '{ echo "ExecStart=/opt/leds_controller/scripts/ugreen-diskiomon"; exit 0; }')
+        host.stub("journalctl", 'echo "ExecStart=/opt/leds_controller/scripts/ugreen-diskiomon"')
+        result = host.run("--idx-test", "collect", "--persist-dir", str(host.persist))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = next(host.persist.parent.glob("ugreen-idx-test-*/feedback.md")).read_text()
+        self.assertIn("ExecStart=<storage>/scripts/ugreen-diskiomon", report)
+        self.assertNotIn("/opt/", report)
+
     def test_idx_report_hides_a_pool_root_folder(self):
         host = self.idx_host()
         pool_root = host.tree / "mnt/tank"
@@ -1397,8 +1469,10 @@ esac''')
                 if case == "first install":
                     (folder / "backup/active.txt").write_text("")  # Nothing ran before the test.
                 host.take_calls()
+                before = host.paths()
 
                 self.assertIn("Module is busy", self.rollback(host, 1).stdout)
+                self.assertEqual(host.paths(), before)
                 calls = host.take_calls().splitlines()
                 for monitor in active_before:
                     self.assertIn(f"systemctl start ugreen-{monitor}.service", calls)
@@ -1409,6 +1483,34 @@ esac''')
                 self.rollback(host)
                 self.assertTrue((folder / "rolled-back").exists())
                 self.assertEqual(old_clone.exists(), case != "first install")
+
+    def test_busy_recovery_starts_every_monitor_even_when_one_fails(self):
+        host = self.idx_host()
+        self.install(host, host.persist, "--controller-source", "idx6011", HEAD_COMMIT=SCRIPTS_COMMIT)
+        result = host.run("--idx-test", "install", "--persist-dir", str(host.persist), HEAD_COMMIT=SCRIPTS_COMMIT)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        host.stub("rmmod", "exit 1")
+        host.fail_systemctl("start ugreen-diskiomon.service")
+        host.take_calls()
+        self.assertIn("Module is busy", self.rollback(host, 1).stdout)
+        self.assertIn("systemctl start ugreen-power-led.service", host.take_calls())
+
+    def test_failed_direct_load_fails_the_idx_test(self):
+        for command in ("rmmod", "insmod"):
+            with self.subTest(command=command):
+                host = self.idx_host()
+                host.stub(command, "exit 9")
+                result = host.run("--idx-test", "install", "--persist-dir", str(host.persist), HEAD_COMMIT=SCRIPTS_COMMIT)
+                self.assertEqual(result.returncode, 9, result.stdout + result.stderr)
+                self.assertIn("FAILED:", result.stdout)
+                self.assertNotIn("SUCCESS:", result.stdout)
+
+    def test_idx_test_prints_the_recovery_command_before_the_install(self):
+        host = self.idx_host()
+        host.stub("git", 'kill -9 $PPID $(ps -o ppid= $PPID)')
+        result = host.run("--idx-test", "install", "--persist-dir", str(host.persist))
+        self.assertEqual(result.returncode, -9, result.stdout + result.stderr)
+        self.assertIn("recover with: sudo bash", result.stdout)
 
     def test_failed_idx_test_recovery_keeps_the_clone(self):
         host = self.idx_host()
