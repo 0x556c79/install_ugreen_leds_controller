@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [3.0.0] - 2026-11-25
 
 ### Behavior changes
 
@@ -49,7 +49,6 @@ Check these before upgrading; details are under Fixed and Removed.
   not capture a failed test.
 - Reduced the tester guide to collection, installation and visual feedback.
 
-
 ### Changed
 
 #### Hardware-gated upstream iDX6011 Pro beta migration ([#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23))
@@ -86,8 +85,6 @@ Check these before upgrading; details are under Fixed and Removed.
   rewriting unrelated custom configuration.
 - Removed the fork-specific six-disk script rewrite. The beta module exposes
   `disk1` through `disk6`, and upstream's monitor ignores absent LEDs.
-
----
 
 ### Fixed
 
@@ -187,6 +184,8 @@ Check these before upgrading; details are under Fixed and Removed.
 - The LED-name patch of `ugreen-netdevmon`: the installer never starts that
   monitor and removes its `@` instances at boot. Started by hand, it uses
   upstream's `netdev` LED and ignores `NETDEV_LED_NAMES`.
+
+---
 
 ## [2.0.9] - 2026-04-18
 
