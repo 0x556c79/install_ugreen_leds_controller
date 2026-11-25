@@ -87,10 +87,6 @@ Check these before upgrading; details are under Fixed and Removed.
 - Removed the fork-specific six-disk script rewrite. The beta module exposes
   `disk1` through `disk6`, and upstream's monitor ignores absent LEDs.
 
-The third-party build workflow and source tree remain available only as a
-hardware-test rollback. They must not be removed or merged away until the
-candidate passes iDX6011 Pro hardware and reboot acceptance.
-
 ---
 
 ### Fixed
@@ -182,6 +178,9 @@ candidate passes iDX6011 Pro hardware and reboot acceptance.
 
 ### Removed
 
+- The iDX6011 TrueNAS module build workflow and `build-scripts/truenas/`, kept
+  only as a rollback until iDX6011 Pro hardware and reboot acceptance passed on
+  TrueNAS SCALE 25.10.8 ([#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23)).
 - Copies of the helper scripts in `/usr/bin`: units use the persistent copies.
   Uninstall and the beta backup still handle copies from older installs.
 - The informational network interface scan, so `ip` is no longer required.
