@@ -6,7 +6,7 @@ Guidance for Agents when working in this repository.
 
 A single Bash installer script that sets up the [ugreen_leds_controller](https://github.com/miskcoo/ugreen_leds_controller) on TrueNAS SCALE. It downloads a pre-built kernel module, installs systemd services, handles read-only root filesystems, and persists across system updates via ZFS pool storage.
 
-**Latest released version:** v2.0.9 (2026-04-18); current development remains unreleased
+**Latest released version:** v3.0.0 (2026-11-25)
 **Main file:** `install_ugreen_leds_controller.sh`
 
 See `CHANGELOG.md` for full version history and `README.md` for user-facing documentation.
