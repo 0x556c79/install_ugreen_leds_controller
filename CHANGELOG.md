@@ -4,31 +4,190 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Behavior changes
+
+Check these before upgrading; details are under Fixed and Removed.
+
+- Installs now refuse a storage folder outside `/mnt/`, including with `--yes`,
+  which used to install off-pool. The script itself may run from anywhere.
+- `--uninstall` keeps foreign files: anything the installer did not create stays
+  in the persistent directory, and the folder goes only if nothing else is in it.
+  A folder with no install marker (`.installer-source`, `.module-source`, or the
+  `.version` and `led-ugreen.ko` pair v2.0.x left) and no installed service
+  pointing at it is not touched at all.
+- `--uninstall` refuses a folder with no installation while the installed
+  service points at another one, before it removes anything.
+- An install refuses to replace an `ugreen_leds_controller` folder in a storage
+  folder with no install marker and no installed service pointing at it, unless
+  `--force` is given.
+- `ugreen-power-led.service` is always enabled and restarted, whatever
+  `BLINK_TYPE_POWER` says: it also applies color and brightness, and the old
+  check never matched upstream's `"none"`.
+- Upstream helper scripts no longer refresh at every boot, only when the module
+  is re-downloaded, or on a source change, `--force` or a missing clone.
+- A driver that fails to load now exits non-zero instead of printing
+  `Installation Complete!`.
+- The `/usr/bin` helper copies are gone; services run the persistent copies.
+- The legacy `install_ugreen_leds_controller_v1.0.sh` script is removed.
+- A newer TrueNAS on the iDX beta profile stops until `IDX_ARTIFACT_COMMIT` is
+  bumped to an artifact tree that has its exact version.
+- The recommended Post Init timeout is now 60 seconds: the first boot after a
+  TrueNAS update downloads a driver and refreshes the upstream scripts.
+
 ### Added
 
-#### iDX6011/iDX6012 Controller Source Support ([#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23))
+- Two-stage `--idx-test collect|install` workflow: automatic hardware report,
+  mandatory configuration/file backup before changes, fresh beta installation,
+  explicit cached-module loading, service checks and a shareable `feedback.md`.
+- `feedback.md` is safe to post: it leaves out journal hostnames, the disk
+  serials the monitor logs under `MAPPING_METHOD=serial`, and every `/mnt/` path,
+  which shows as `<storage>`.
+- A per-test recovery script restores the previous installer-owned files,
+  clone, module parameters and service states; early failures also produce a
+  report. A new `--idx-test install` beside the same storage folder is refused
+  until the last test is rolled back or its folder deleted, so its backup does
+  not capture a failed test.
+- Reduced the tester guide to collection, installation and visual feedback.
 
-- Added `--controller-source <auto|upstream|idx6011>`. The default `auto`
-  profile detects `iDX6011`/`iDX6012` from DMI and otherwise keeps the existing
-  upstream DX/DXP behavior.
-- Added separate artifact and script source profiles so the temporary iDX
-  implementation can use TrueNAS modules built from
-  `klein0r/ugreen_leds_controller` while upstream support remains pending.
-- Added TrueNAS module build tooling under `build-scripts/truenas/`, pinned to
-  `klein0r/ugreen_leds_controller@480f114bae69ec2bb7003df5d9c13f788ca6ace6`,
-  to avoid accidentally building the non-iDX upstream module.
-- Added `build-idx6011-truenas-kmods` GitHub Actions workflow to build missing
-  supported TrueNAS SCALE artifacts and publish them to the temporary
-  `idx6011-kmods` branch.
-- Added `.module-source` tracking alongside `.version`, preventing a cached
-  module from one controller profile from being reused by another.
-- Installed network monitor scripts now support iDX LED names
-  `network_stat` and `network_stat2`, with optional `NETDEV_LED_NAMES` and
-  `NETDEV_INTERFACE_NAMES` overrides.
-- Disk monitoring now limits iDX6011/iDX6012 systems to `disk1` through
-  `disk6`, avoiding `disk7`/`disk8` sysfs errors on six-bay iDX hardware.
+
+### Changed
+
+#### Hardware-gated upstream iDX6011 Pro beta migration ([#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23))
+
+- Repointed the `idx6011` controller profile from the temporary third-party
+  implementation to official upstream `v0.4-beta`, pinned to commit
+  `c830a2293cf5c67c58e5a98ca339b089b2b13fc3` and to `gh-actions` commit
+  `f7f3766146637858e557b1c5c8dbd1e6e0f7d9b7` for its tagged artifact tree.
+- Preserved `--controller-source <auto|upstream|idx6011>` while narrowing
+  automatic beta selection to the exact `iDX6011 Pro` DMI product name.
+  Exact `iDX6011` remains a manual beta test; internal upstream `iDX6012`
+  detection is unverified, not a hardware-support claim. An `iDX6011` or
+  `iDX6012` install already on `idx6011`, the old fork included, stays on that
+  profile and moves to the beta, because stable cannot drive it. All other models
+  keep stable upstream `master` behavior.
+- The beta profile now requires an exact TrueNAS-version artifact. Its tagged
+  tree covers 25.04.0-25.04.2.6 except 25.04.2.2, and 25.10.0-25.10.8, but not
+  24.04 or 24.10; it never uses stable, older-version, or third-party fallbacks.
+- Source markers now record the upstream tag, commit, and artifact path so an
+  existing third-party cache refreshes once and subsequent boots can reuse the
+  verified beta artifact.
+- Beta downloads are staged in a temporary file, checked with `modinfo` for
+  kernel compatibility and required parameters, then atomically installed.
+- The upstream probe now owns beta module loading with its generated
+  `write_protocol`, network-LED, and disk-LED arguments. The TrueNAS `insmod`
+  fallback preserves those arguments and reads DMI from sysfs before using
+  `dmidecode`.
+- The probe service must complete successfully before disk and network
+  monitors start. Source migrations stop dependent services and unload the
+  previous module before applying the new profile.
+- Updated the dual-network monitor for upstream `netdev`/`netdev2` names,
+  deterministic NIC ordering, and removal of the unsupported `invert` write.
+  The exact legacy override `network_stat network_stat2` is translated without
+  rewriting unrelated custom configuration.
+- Removed the fork-specific six-disk script rewrite. The beta module exposes
+  `disk1` through `disk6`, and upstream's monitor ignores absent LEDs.
+
+The third-party build workflow and source tree remain available only as a
+hardware-test rollback. They must not be removed or merged away until the
+candidate passes iDX6011 Pro hardware and reboot acceptance.
 
 ---
+
+### Fixed
+
+- A normal boot makes no network calls: the clone stays in the persistent folder
+  and is refreshed only when the module is re-downloaded, or on a source change,
+  `--force`, a missing clone or a changed marker. A failed refresh keeps the
+  working clone, and only warns when no module re-download or `--force` needs
+  it and the helper scripts and the `ugreen-diskiomon` unit are installed. The
+  beta test saves the old clone before it writes the recovery script, so
+  recovery always puts it back.
+- Module downloads work again on a real host: `modinfo` rejects a temp file whose
+  name does not end in `.ko`, so every download failed validation. Partial
+  downloads from a killed run are removed by the next download.
+- A failed `insmod` or beta probe now fails the run instead of printing
+  `Installation Complete!`.
+  The next run downloads a new module that failed this way again; a cached module
+  stays trusted, so one failed load does not stop the next offline boot.
+- Replacing a loaded stable driver now stops the LED services first and fails
+  with the services restored if `rmmod` fails. Monitors are always restarted so
+  they bind to the new driver, even when a later step of the run fails.
+- A failed module swap puts the previous module back with its old arguments and
+  restarts the services, also when the beta only reloaded the cached module to
+  fix its parameters. Version markers move only once the new module runs, so
+  a failed swap never reports "up to date" with the old driver in memory. A beta
+  module that was not loaded before the run stays unloaded instead of loading
+  without its model parameters.
+- A run killed during a module swap is undone by the next run, which puts the
+  old module back before it reads the markers. The old module was overwritten
+  by the next download before.
+- A network error while probing modules now stops the run. Only a real 404
+  selects an older module.
+- `--uninstall` remounts `/usr` and `/etc` first, finishes the remaining
+  cleanup when a removal fails, and reports what was left, including a driver
+  that stays loaded, instead of claiming success. The exit code stays 0. On
+  closed stdin its confirmation counts as a no. A failed `daemon-reload` only
+  warns. A file it could not remove from storage is yours to delete: the install
+  markers may be gone by then, so a rerun can leave that folder alone.
+- A signal while the run restarts the monitors or cleans up no longer leaves
+  `/usr` writable or the monitors stopped.
+- `--uninstall` finds the storage folder from the installed service, never
+  creates a folder and never asks where to store files.
+- The `/mnt/` rule now applies to the storage folder, not the script location:
+  `--persist-dir` and `--pool-path` work from any directory, and `--yes` can no
+  longer install off-pool. Installs also refuse storage paths with characters
+  that break the generated files; spaces stay supported through quoted
+  `ExecStart` paths and a quoted Init command. `--idx-test install` refuses such
+  paths before it touches the driver.
+- The printed Init command now names `/bin/bash`, so it does not depend on the
+  execute bit, `--persist-dir` for a folder not named `leds_controller`, so the
+  next boot finds the same install, and any `-v` pin, with a reminder to remove
+  it after a TrueNAS update. An existing Post Init entry for such a folder needs
+  the new command.
+- `-v`, `--persist-dir`, `--pool-path` and `--controller-source` fail clearly
+  when their value is missing or starts with a dash.
+- `--help` and the README now say what `--force` does: it also replaces the LED
+  configuration with the template. The README no longer claims edits to
+  `/etc/ugreen-leds.conf` persist; each run copies the persistent file over it.
+- Prevent filesystem remounts, configuration editor invocation and cleanup
+  deletion during `--dry-run`; regression checks cover full install and
+  uninstall previews with existing and new configuration.
+- Apply the reported `ata3 ata4 ata5 ata6 ata1 ata2` bay order only to exact
+  `iDX6011` with the beta profile. Preserve upstream LED names, HCTL/serial
+  mappings and all other model mappings, including `iDX6011 Pro`.
+- Replace the Pro-only acceptance instructions with a model-specific
+  procedure that records physical LED mapping and includes backup and rollback.
+- `ugreen-netdevmon-multi` no longer hides failures behind `exit 0`, so
+  `Restart=on-failure` works, and it drops its lock file: systemd keeps one copy.
+  Any failed LED write at startup now fails the service, not only the last one.
+- A `/usr` or `/etc` mount the installer or the beta recovery script made
+  writable is put back read-only on exit; a failed restore only warns. The
+  installer opens them only after its network steps, so a killed download
+  cannot leave them writable. A stacked mount is judged by its top layer.
+- The beta recovery script also restores `ugreen-netdevmon@.service` and legacy
+  `ugreen-netdevmon@<nic>` instances.
+- A beta recovery that cannot unload a busy driver restarts the monitors, says
+  so and restores nothing, so it can simply be rerun.
+- `--idx-test collect` no longer stops on an off-pool module beside the script
+  or in the current folder; it collects in `/tmp` like a machine with no install.
+- The beta test prints the recovery command right after the backup, so a dropped
+  SSH session does not lose it.
+- A first install killed right after the clone is moved into place is no longer
+  refused by the next run.
+- An uninstall killed part way can be rerun: the files that prove the folder is
+  an install are removed last, and the clone is renamed away before it is removed.
+  A v2.0.x folder killed just before its `.version` is removed keeps that file
+  for you to delete.
+- The feedback report also hides the folder of an install outside `/mnt`.
+
+### Removed
+
+- Copies of the helper scripts in `/usr/bin`: units use the persistent copies.
+  Uninstall and the beta backup still handle copies from older installs.
+- The informational network interface scan, so `ip` is no longer required.
+- The LED-name patch of `ugreen-netdevmon`: the installer never starts that
+  monitor and removes its `@` instances at boot. Started by hand, it uses
+  upstream's `netdev` LED and ignores `NETDEV_LED_NAMES`.
 
 ## [2.0.9] - 2026-04-18
 
