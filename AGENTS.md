@@ -106,9 +106,9 @@ The script is a single file organized into named functions. The main ones:
 - `auto` selects upstream `v0.4-beta` only for exact DMI product `iDX6011 Pro`; all other models remain on stable `master`, except iDX6011/iDX6012 installs already on `idx6011`. `idx6011` is the explicit experimental override.
 - The beta profile is pinned to tag commit `c830a2293cf5c67c58e5a98ca339b089b2b13fc3` and artifact commit `f7f3766146637858e557b1c5c8dbd1e6e0f7d9b7`. Its probe service must load the module with model-specific parameters before dependent monitors start.
 - A newer TrueNAS release needs `IDX_ARTIFACT_COMMIT` bumped: the beta profile only uses exact artifacts from that pinned tree.
-- iDX6011 Pro hardware and reboot acceptance passed on TrueNAS SCALE 25.10.8 (issue #23). `.github/workflows/build-idx6011-truenas-kmods.yml`, `build-scripts/truenas/` and the remote `idx6011-kmods` rollback branch are now only kept until a separate change removes them.
+- iDX6011 Pro hardware and reboot acceptance passed on TrueNAS SCALE 25.10.8 (issue #23). The self-built module tooling kept for rollback until then is removed; the beta profile uses only upstream's pinned artifacts.
 
-## Validation and temporary fallback tooling
+## Validation
 
 The installer itself has no compilation or package-manager step. Validate it with:
 
@@ -118,7 +118,3 @@ shellcheck install_ugreen_leds_controller.sh
 git diff --check
 python3 -m unittest discover -s tests -v
 ```
-
-The repository still contains temporary TrueNAS module build tooling solely for
-hardware-test rollback. It is staged for deletion only after upstream beta
-hardware acceptance.

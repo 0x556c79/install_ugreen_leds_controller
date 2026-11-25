@@ -95,6 +95,6 @@ missing evidence, not a support or release claim. Physical LED layout, all
 populated bays, empty-bay behavior, connected NICs and reboot persistence
 remain hardware gates. Missing equipment leaves the corresponding gate open.
 
-Keep PR #28 draft. Non-Pro acceptance does not establish Pro acceptance.
-Keep the fallback workflow, build scripts and remote `idx6011-kmods` branch
-until the relevant model-specific hardware and reboot gates are satisfied.
+Non-Pro acceptance does not establish Pro acceptance. iDX6011 Pro hardware and
+reboot acceptance passed on TrueNAS SCALE 25.10.8 (issue #23), so the fallback
+workflow and build scripts are removed.

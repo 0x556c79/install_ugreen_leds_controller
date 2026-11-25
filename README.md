@@ -103,9 +103,7 @@ files, module and service states without rerunning the old installer.
 > [!WARNING]
 > This is a current-boot hardware test. It does not reboot or edit TrueNAS
 > Init/Shutdown entries; an existing entry can reapply an older profile or
-> workaround at the next boot. Keep PR #28 in draft and retain the fallback
-> workflow, build scripts and `idx6011-kmods` branch until the separate hardware
-> and reboot acceptance gates pass.
+> workaround at the next boot. Reboot acceptance is a separate check.
 
 ## TrueNAS Scale Read-Only Filesystem Support
 
