@@ -23,7 +23,7 @@ See `CHANGELOG.md` for full version history and `README.md` for user-facing docu
 Stable upstream artifacts cover the table above. The experimental upstream
 `v0.4-beta` profile for iDX6011 Pro has exact-version artifacts only for the
 25.04 and 25.10 trains (the pinned artifact commit covers 25.04.0-25.04.2.6
-except 25.04.2.2, and 25.10.0-25.10.7); it must not fall back to an older module.
+except 25.04.2.2, and 25.10.0-25.10.8); it must not fall back to an older module.
 
 ## Running the Script
 
@@ -104,9 +104,9 @@ The script is a single file organized into named functions. The main ones:
 - Needs internet access to `raw.githubusercontent.com`, `api.github.com` and `github.com` only for a first install, a TrueNAS update, a source change, `--force` or a missing clone or module. A failed clone only warns when no module re-download or `--force` needs it and the scripts and a unit are installed. A normal boot with a matching module and clone makes no network calls. Codename lookup falls back to a hardcoded table.
 - Runtime dependencies: `git`, `curl`, `modinfo`, `modprobe`, `insmod`, `rmmod`, `depmod`, `mount`, `realpath`, `systemctl`; `nano` for the interactive config edit, `dmidecode` when sysfs has no DMI name. `--idx-test` also needs `tar`, `sha256sum`, `journalctl` and `findmnt`.
 - `auto` selects upstream `v0.4-beta` only for exact DMI product `iDX6011 Pro`; all other models remain on stable `master`, except iDX6011/iDX6012 installs already on `idx6011`. `idx6011` is the explicit experimental override.
-- The beta profile is pinned to tag commit `c830a2293cf5c67c58e5a98ca339b089b2b13fc3` and artifact commit `42b92b609df02504d5175970c3c121d8e40fa3de`. Its probe service must load the module with model-specific parameters before dependent monitors start.
+- The beta profile is pinned to tag commit `c830a2293cf5c67c58e5a98ca339b089b2b13fc3` and artifact commit `f7f3766146637858e557b1c5c8dbd1e6e0f7d9b7`. Its probe service must load the module with model-specific parameters before dependent monitors start.
 - A newer TrueNAS release needs `IDX_ARTIFACT_COMMIT` bumped: the beta profile only uses exact artifacts from that pinned tree.
-- Do not merge the beta candidate or remove `.github/workflows/build-idx6011-truenas-kmods.yml`, `build-scripts/truenas/`, or the remote `idx6011-kmods` rollback branch until real iDX6011 Pro hardware and reboot acceptance pass.
+- iDX6011 Pro hardware and reboot acceptance passed on TrueNAS SCALE 25.10.8 (issue #23). `.github/workflows/build-idx6011-truenas-kmods.yml`, `build-scripts/truenas/` and the remote `idx6011-kmods` rollback branch are now only kept until a separate change removes them.
 
 ## Validation and temporary fallback tooling
 

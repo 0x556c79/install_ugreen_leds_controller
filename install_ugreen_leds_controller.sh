@@ -87,7 +87,7 @@ readonly REPO_NAME="ugreen_leds_controller"
 readonly SCRIPT_REPO_URL="https://github.com/miskcoo/ugreen_leds_controller.git"
 readonly IDX_UPSTREAM_TAG="v0.4-beta"
 readonly IDX_UPSTREAM_COMMIT="c830a2293cf5c67c58e5a98ca339b089b2b13fc3"
-readonly IDX_ARTIFACT_COMMIT="42b92b609df02504d5175970c3c121d8e40fa3de"
+readonly IDX_ARTIFACT_COMMIT="f7f3766146637858e557b1c5c8dbd1e6e0f7d9b7"
 readonly IDX_MODULE_SOURCE="idx6011:miskcoo/ugreen_leds_controller@${IDX_UPSTREAM_TAG}:${IDX_UPSTREAM_COMMIT}:${IDX_ARTIFACT_COMMIT}:build-scripts/truenas/build/tags/${IDX_UPSTREAM_TAG}"
 # Uninstall removes these in order; the last four prove the folder is an install, so they go last.
 readonly PERSIST_FILES=(ugreen-leds.conf install_ugreen_leds_controller.sh led-ugreen.ko.previous led-ugreen.ko .version .module-source .installer-source)
@@ -360,7 +360,7 @@ idx_test_capture() {
     local path name value iface
     printf 'Time: '; date -u
     printf 'Stage: %s\nPersistent directory: %s\n' "$IDX_TEST_MODE" "$PERSIST_DIR"
-    printf 'TrueNAS: '; cat /etc/version 2>/dev/null || true
+    printf 'TrueNAS: %s\n' "$(cat /etc/version 2>/dev/null || true)"  # /etc/version has no trailing newline
     printf 'Kernel: '; uname -r
     for name in product_name product_version board_name; do
         printf 'DMI %s: ' "$name"

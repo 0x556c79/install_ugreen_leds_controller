@@ -36,7 +36,7 @@ The installer asks where to store its files. That folder must be under `/mnt/`, 
 > - [x] UGREEN DXP6800 Pro ([upstream #7](https://github.com/miskcoo/ugreen_leds_controller/issues/7); [installer report #17](https://github.com/0x556c79/install_ugreen_leds_controller/issues/17))
 > - [x] UGREEN DXP8800 Plus ([upstream #1](https://github.com/miskcoo/ugreen_leds_controller/issues/1), [supporting repository](https://github.com/meyergru/ugreen_dxp8800_leds_controller)); developed and tested with this installer on this model.
 > - [ ] UGREEN DXP480T Plus ([upstream #6 comment](https://github.com/miskcoo/ugreen_leds_controller/issues/6#issuecomment-2156807225))
-> - [ ] UGREEN iDX6011 Pro (**Experimental candidate**, automatically selects upstream [v0.4-beta](https://github.com/miskcoo/ugreen_leds_controller/releases/tag/v0.4-beta); hardware validation is still required in [#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23)).
+> - [ ] UGREEN iDX6011 Pro (**Experimental upstream beta**, automatically selects upstream [v0.4-beta](https://github.com/miskcoo/ugreen_leds_controller/releases/tag/v0.4-beta)). Tested working with this installer on TrueNAS SCALE 25.10.8, including LED positions, disk and network activity and a reboot, in [#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23).
 > - [ ] UGREEN iDX6011 (**Manual beta test candidate** via `--controller-source idx6011`; the report in [#23](https://github.com/0x556c79/install_ugreen_leds_controller/issues/23#issuecomment-5848438206) tested the old fork, not this beta).
 
 If upstream confirms another model as working and you have tested this installer on it, feel free to open an issue or pull request here!
@@ -62,10 +62,10 @@ otherwise. Upstream also recognizes `iDX6012` internally, but this project has
 no evidence of a shipping/tested device under that name and does not claim
 hardware support for it.
 
-The module comes from upstream's [tagged artifact tree](https://github.com/miskcoo/ugreen_leds_controller/tree/42b92b609df02504d5175970c3c121d8e40fa3de/build-scripts/truenas/build/tags/v0.4-beta),
-pinned to artifact commit `42b92b609df02504d5175970c3c121d8e40fa3de`. That tree
+The module comes from upstream's [tagged artifact tree](https://github.com/miskcoo/ugreen_leds_controller/tree/f7f3766146637858e557b1c5c8dbd1e6e0f7d9b7/build-scripts/truenas/build/tags/v0.4-beta),
+pinned to artifact commit `f7f3766146637858e557b1c5c8dbd1e6e0f7d9b7`. That tree
 supports exact versions 25.04.0-25.04.2.6 (there is no 25.04.2.2 artifact) and
-25.10.0-25.10.7; a newer TrueNAS needs a version bump of the `IDX_ARTIFACT_COMMIT` constant in the installer.
+25.10.0-25.10.8; a newer TrueNAS needs a version bump of the `IDX_ARTIFACT_COMMIT` constant in the installer.
 This profile requires an exact TrueNAS-version artifact and matching running
 kernel; it never falls back to an older version, stable module, or old fork.
 The 25.10.5 beta artifact has been checked against kernel

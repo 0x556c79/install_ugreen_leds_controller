@@ -57,7 +57,7 @@ Check these before upgrading; details are under Fixed and Removed.
 - Repointed the `idx6011` controller profile from the temporary third-party
   implementation to official upstream `v0.4-beta`, pinned to commit
   `c830a2293cf5c67c58e5a98ca339b089b2b13fc3` and to `gh-actions` commit
-  `42b92b609df02504d5175970c3c121d8e40fa3de` for its tagged artifact tree.
+  `f7f3766146637858e557b1c5c8dbd1e6e0f7d9b7` for its tagged artifact tree.
 - Preserved `--controller-source <auto|upstream|idx6011>` while narrowing
   automatic beta selection to the exact `iDX6011 Pro` DMI product name.
   Exact `iDX6011` remains a manual beta test; internal upstream `iDX6012`
@@ -66,7 +66,7 @@ Check these before upgrading; details are under Fixed and Removed.
   profile and moves to the beta, because stable cannot drive it. All other models
   keep stable upstream `master` behavior.
 - The beta profile now requires an exact TrueNAS-version artifact. Its tagged
-  tree covers 25.04.0-25.04.2.6 except 25.04.2.2, and 25.10.0-25.10.7, but not
+  tree covers 25.04.0-25.04.2.6 except 25.04.2.2, and 25.10.0-25.10.8, but not
   24.04 or 24.10; it never uses stable, older-version, or third-party fallbacks.
 - Source markers now record the upstream tag, commit, and artifact path so an
   existing third-party cache refreshes once and subsequent boots can reuse the
